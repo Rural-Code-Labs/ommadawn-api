@@ -137,33 +137,25 @@ sequenceDiagram
     participant API as Ommadawn API
     participant DB as Base de datos
 
-    rect rgb(240, 246, 252)
     note over App,DB: 1 · Login
     App->>API: usuario + contraseña
     API->>DB: verifica hash argon2 · guarda hash del refresh token
     API-->>App: access token (JWT, ~15 min) + refresh token (~30 días)
-    end
 
-    rect rgb(240, 246, 252)
     note over App,DB: 2 · Petición autenticada (se repite ~15 min)
     App->>API: GET /api/v1/... · Authorization: Bearer <access token>
     API->>API: valida firma y caducidad del JWT (sin tocar la BD)
     API-->>App: datos
-    end
 
-    rect rgb(240, 246, 252)
     note over App,DB: 3 · Renovación con rotación (el access token caducó)
     App->>API: refresh token → /api/v1/auth/refresh
     API->>DB: valida · revoca el actual · emite uno nuevo (atómico)
     API-->>App: nuevo access token + nuevo refresh token
-    end
 
-    rect rgb(240, 246, 252)
     note over App,DB: 4 · Logout
     App->>API: refresh token → /api/v1/auth/logout
     API->>DB: marca el token como revocado
     API-->>App: sesión cerrada
-    end
 ```
 
 ---
