@@ -160,6 +160,35 @@ async def test_refresh_with_invalid_token_returns_401(client: AsyncClient):
     assert resp.status_code == 401
 
 
+async def test_reusing_rotated_token_revokes_entire_session(client: AsyncClient):
+    # Deteccion de reuso: si un refresh token YA rotado reaparece, es senal de
+    # robo -> se revoca TODA la sesion del usuario, no solo ese token.
+    await client.post(f"{BASE}/register", json=CREDS)
+    login = {"username_or_email": "mike", "password": "tubular123"}
+
+    # Dos sesiones activas del mismo usuario (p. ej. dos dispositivos).
+    session_a = (await client.post(f"{BASE}/login", json=login)).json()["refresh_token"]
+    session_b = (await client.post(f"{BASE}/login", json=login)).json()["refresh_token"]
+
+    # Rotamos la sesion A: `session_a` queda revocado, nace `session_a_new`.
+    rotated = await client.post(f"{BASE}/refresh", json={"refresh_token": session_a})
+    assert rotated.status_code == 200
+    session_a_new = rotated.json()["refresh_token"]
+
+    # REUSO: volvemos a mandar `session_a` (ya rotado) -> 401 y dispara la alarma.
+    reuse = await client.post(f"{BASE}/refresh", json={"refresh_token": session_a})
+    assert reuse.status_code == 401
+
+    # Consecuencia: NINGUN refresh token del usuario sirve ya, ni el token nuevo
+    # y legitimo de A ni la otra sesion B. Todo el mundo debe re-loguear.
+    assert (
+        await client.post(f"{BASE}/refresh", json={"refresh_token": session_a_new})
+    ).status_code == 401
+    assert (
+        await client.post(f"{BASE}/refresh", json={"refresh_token": session_b})
+    ).status_code == 401
+
+
 # --- Logout --------------------------------------------------------------------
 
 

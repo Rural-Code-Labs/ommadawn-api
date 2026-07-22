@@ -21,39 +21,46 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 import jwt
-from passlib.context import CryptContext
+from argon2 import PasswordHasher
+from argon2.exceptions import InvalidHashError, VerifyMismatchError
 
 from app.core.config import get_settings
 
 settings = get_settings()
 
-# Contexto de passlib configurado con argon2 (el algoritmo recomendado hoy para
-# contrasenas). `deprecated="auto"` marca como "obsoleto" cualquier hash que no
-# use el esquema actual: eso permite, el dia que cambiemos de algoritmo,
-# detectar hashes viejos y regenerarlos de forma transparente al hacer login.
-pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
+# Hasher de argon2 (a traves de argon2-cffi directamente, sin passlib de por
+# medio). Con sus parametros por defecto usa argon2id, el modo recomendado.
+# `PasswordHasher` genera un `salt` aleatorio en cada hash, asi que dos usuarios
+# con la misma contrasena tendran hashes distintos.
+password_hasher = PasswordHasher()
 
 
 # --- Contrasenas ---------------------------------------------------------------
 
 
 def hash_password(password: str) -> str:
-    """Devuelve el hash argon2 de una contrasena en claro.
+    """Devuelve el hash argon2id de una contrasena en claro.
 
-    argon2 incluye internamente un `salt` aleatorio, asi que dos usuarios con la
-    misma contrasena tendran hashes distintos. Nunca se guarda la contrasena en
-    claro: solo este hash.
+    Nunca se guarda la contrasena en claro: solo este hash.
     """
-    return pwd_context.hash(password)
+    return password_hasher.hash(password)
 
 
 def verify_password(plain: str, hashed: str) -> bool:
     """Comprueba si una contrasena en claro corresponde a un hash guardado.
 
-    No se "deshashea" (es imposible): se vuelve a hashear la contrasena recibida
-    con el mismo salt y se compara. Devuelve True/False, sin lanzar excepcion.
+    No se "deshashea" (es imposible): argon2 vuelve a derivar el hash con el
+    mismo salt y lo compara. `argon2-cffi` LANZA excepcion cuando no coincide (o
+    si el hash esta mal formado); aqui la traducimos a un `bool` limpio para que
+    quien llame no tenga que preocuparse de excepciones.
+
+    Nota: el orden de los argumentos en argon2-cffi es `verify(hash, password)`,
+    al reves que en passlib.
     """
-    return pwd_context.verify(plain, hashed)
+    try:
+        return password_hasher.verify(hashed, plain)
+    except (VerifyMismatchError, InvalidHashError):
+        return False
 
 
 # --- Access token (JWT) --------------------------------------------------------

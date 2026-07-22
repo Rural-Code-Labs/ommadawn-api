@@ -86,27 +86,53 @@ async def get_valid_refresh_token(
     return result.scalar_one_or_none()
 
 
-async def rotate_refresh_token(
+async def _get_refresh_token_row(
     session: AsyncSession, token: str
-) -> tuple[int, str] | None:
-    """Rota un refresh token: revoca el actual y emite uno nuevo (atomico).
+) -> RefreshToken | None:
+    """Busca la fila de un refresh token por su hash, SIN filtrar nada mas.
 
-    Devuelve `(user_id, nuevo_token_en_claro)` si el token era valido, o `None`
-    si no lo era (inexistente, revocado o caducado). Con el `user_id` el router
-    podra ademas emitir un access token nuevo.
-
-    Todo ocurre en una sola transaccion: revocar el viejo y crear el nuevo se
-    confirman juntos en un unico `commit`. Si algo fallara, no quedaria el token
-    viejo revocado "a medias".
+    A diferencia de `get_valid_refresh_token`, devuelve la fila aunque este
+    revocada o caducada. Es lo que permite distinguir "el token nunca existio"
+    de "existio pero ya estaba revocado" -> la base de la deteccion de reuso.
     """
-    current = await get_valid_refresh_token(session, token)
-    if current is None:
-        return None
+    result = await session.execute(
+        select(RefreshToken).where(
+            RefreshToken.token_hash == hash_refresh_token(token)
+        )
+    )
+    return result.scalar_one_or_none()
 
-    current.revoked = True
-    new_token = _build_refresh_token(session, current.user_id)
-    await session.commit()
-    return current.user_id, new_token
+
+def _is_expired(row: RefreshToken) -> bool:
+    """Indica si una fila de refresh token ha caducado.
+
+    Normaliza la fecha a UTC antes de comparar: SQLite (desarrollo) devuelve
+    fechas "naive" (sin zona) y PostgreSQL (produccion) las devuelve "aware".
+    Como siempre las guardamos en UTC, tratar una naive como UTC es correcto y
+    hace que la comparacion funcione igual en ambos motores.
+    """
+    expires_at = row.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return expires_at <= datetime.now(timezone.utc)
+
+
+async def _revoke_all_refresh_tokens(session: AsyncSession, user_id: int) -> int:
+    """Revoca TODOS los refresh tokens activos de un usuario. Devuelve cuantos.
+
+    Se usa cuando detectamos un reuso: ante la sospecha de robo, matamos la
+    sesion entera y obligamos a volver a iniciar sesion con contrasena.
+    """
+    result = await session.execute(
+        select(RefreshToken).where(
+            RefreshToken.user_id == user_id,
+            RefreshToken.revoked.is_(False),
+        )
+    )
+    rows = result.scalars().all()
+    for row in rows:
+        row.revoked = True
+    return len(rows)
 
 
 async def revoke_refresh_token(session: AsyncSession, token: str) -> bool:
@@ -194,19 +220,36 @@ async def login_user(
 async def refresh_tokens(session: AsyncSession, refresh_token: str) -> TokenPair:
     """Renueva la sesion: valida el refresh token, lo rota y emite tokens nuevos.
 
-    Antes de rotar comprobamos que el usuario siga activo: asi no revocamos el
-    token viejo (dejando la sesion a medias) si la cuenta esta desactivada.
+    Incluye DETECCION DE REUSO. El flujo, de arriba a abajo:
+
+      1. Buscamos la fila por hash, sin filtrar (revocada o no, caducada o no).
+      2. Si no existe o ha caducado -> 401 normal.
+      3. Si existe pero YA estaba revocada -> reuso: un token que ya se uso vuelve
+         a aparecer. Es senal de robo (hay dos copias circulando), asi que
+         revocamos TODA la sesion del usuario y respondemos 401. El atacante y el
+         usuario legitimo quedan fuera; solo quien sepa la contrasena vuelve.
+      4. Si el usuario esta inactivo -> 403.
+      5. Si todo esta bien -> rotamos (revocar el actual + emitir uno nuevo) en
+         una unica transaccion atomica, y devolvemos el par nuevo.
     """
-    current = await get_valid_refresh_token(session, refresh_token)
-    if current is None:
+    row = await _get_refresh_token_row(session, refresh_token)
+    if row is None or _is_expired(row):
         raise invalid_refresh_token_exception
 
-    user = await session.get(User, current.user_id)
+    if row.revoked:
+        # Reuso detectado: matamos la sesion entera por si acaso.
+        await _revoke_all_refresh_tokens(session, row.user_id)
+        await session.commit()
+        raise invalid_refresh_token_exception
+
+    user = await session.get(User, row.user_id)
     if user is None or not user.is_active:
         raise inactive_user_exception
 
-    # A partir de aqui la rotacion (revocar el viejo + emitir uno nuevo) es atomica.
-    _, new_refresh_token = await rotate_refresh_token(session, refresh_token)  # type: ignore[misc]
+    # Rotacion atomica: revocar el actual y emitir uno nuevo en un solo commit.
+    row.revoked = True
+    new_refresh_token = _build_refresh_token(session, row.user_id)
+    await session.commit()
 
     return TokenPair(
         access_token=create_access_token(user.id),

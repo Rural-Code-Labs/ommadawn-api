@@ -21,7 +21,7 @@ es un ciudadano de primera clase: estable y bien versionado.
 | SQLAlchemy 2.0 (async) | ORM |
 | Alembic | Migraciones de base de datos |
 | Pydantic v2 + pydantic-settings | Schemas de API y configuración vía `.env` |
-| passlib[argon2] | Hashing de contraseñas |
+| argon2-cffi | Hashing de contraseñas (argon2id) |
 | PyJWT | Access / refresh tokens |
 | SQLite (aiosqlite) | Base de datos en **desarrollo** |
 | PostgreSQL (asyncpg) | Base de datos en **producción** |
@@ -134,6 +134,9 @@ Se manejan **dos tokens con roles distintos**:
 - **Rotación**: cada renovación revoca el refresh token usado y emite uno nuevo,
   de forma atómica. Un token robado deja de servir en cuanto el usuario legítimo
   renueva.
+- **Detección de reúso**: si un refresh token **ya rotado** reaparece (señal de
+  que hay dos copias circulando → robo), se revoca **toda la sesión** del usuario
+  y se le obliga a volver a iniciar sesión con contraseña.
 
 ### Endpoints
 

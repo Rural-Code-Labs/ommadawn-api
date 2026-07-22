@@ -32,7 +32,7 @@ mantenerse estable y bien versionado.
 | SQLAlchemy 2.0 (async) | ORM |
 | Alembic | Migraciones de base de datos |
 | Pydantic v2 + pydantic-settings | Schemas de API y configuración vía `.env` |
-| passlib[argon2] | Hashing de contraseñas |
+| argon2-cffi | Hashing de contraseñas (argon2id) |
 | PyJWT | Access / refresh tokens |
 | SQLite (aiosqlite) | Base de datos en **desarrollo** |
 | PostgreSQL (asyncpg) | Base de datos en **producción** |
