@@ -11,6 +11,18 @@ incorrecta. Asi un atacante no puede averiguar que usernames/emails existen.
 """
 
 from fastapi import HTTPException, status
+from pydantic import BaseModel
+
+
+class ErrorMessage(BaseModel):
+    """Forma del cuerpo de una respuesta de error.
+
+    FastAPI devuelve los errores como `{"detail": "..."}`. Declarar este modelo
+    permite que la documentacion (OpenAPI/Swagger) muestre exactamente esa forma,
+    para que el cliente (la app movil) sepa que esperar en cada error.
+    """
+
+    detail: str
 
 # 401 -> el login ha fallado. Mensaje deliberadamente vago (ver docstring).
 # La cabecera WWW-Authenticate es la forma estandar de indicar que se espera un

@@ -100,9 +100,17 @@ cp .env.example .env
 python3 -c "import secrets; print(secrets.token_urlsafe(64))"   # generar SECRET_KEY
 # …y pégala en la variable SECRET_KEY de tu .env
 
-# Arrancar el servidor (docs interactivas en http://localhost:8000/docs)
+# Arrancar el servidor
 uvicorn app.main:app --reload
 ```
+
+Con el servidor en marcha, FastAPI genera la documentación de la API sola:
+
+| URL | Qué es |
+|---|---|
+| http://localhost:8000/docs | **Swagger UI** — documentación interactiva (probar endpoints, botón *Authorize*) |
+| http://localhost:8000/redoc | **ReDoc** — documentación de lectura/referencia |
+| http://localhost:8000/openapi.json | **Contrato OpenAPI** — fuente para generar clientes (p. ej. el de iOS con `swift-openapi-generator`) |
 
 En **desarrollo** las tablas se crean solas al arrancar (`create_all`); en
 **producción** el esquema se gestiona siempre con migraciones Alembic.
