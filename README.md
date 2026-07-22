@@ -129,6 +129,43 @@ Se manejan **dos tokens con roles distintos**:
   de forma atómica. Un token robado deja de servir en cuanto el usuario legítimo
   renueva.
 
+### Flujo: del login al logout
+
+```mermaid
+sequenceDiagram
+    participant App as App móvil
+    participant API as Ommadawn API
+    participant DB as Base de datos
+
+    rect rgb(240, 246, 252)
+    note over App,DB: 1 · Login
+    App->>API: usuario + contraseña
+    API->>DB: verifica hash argon2 · guarda hash del refresh token
+    API-->>App: access token (JWT, ~15 min) + refresh token (~30 días)
+    end
+
+    rect rgb(240, 246, 252)
+    note over App,DB: 2 · Petición autenticada (se repite ~15 min)
+    App->>API: GET /api/v1/... · Authorization: Bearer <access token>
+    API->>API: valida firma y caducidad del JWT (sin tocar la BD)
+    API-->>App: datos
+    end
+
+    rect rgb(240, 246, 252)
+    note over App,DB: 3 · Renovación con rotación (el access token caducó)
+    App->>API: refresh token → /api/v1/auth/refresh
+    API->>DB: valida · revoca el actual · emite uno nuevo (atómico)
+    API-->>App: nuevo access token + nuevo refresh token
+    end
+
+    rect rgb(240, 246, 252)
+    note over App,DB: 4 · Logout
+    App->>API: refresh token → /api/v1/auth/logout
+    API->>DB: marca el token como revocado
+    API-->>App: sesión cerrada
+    end
+```
+
 ---
 
 ## Plan por fases
@@ -145,11 +182,3 @@ antes de empezar la siguiente.
 | **5 — Discografía** | Álbumes de estudio, recopilatorios, singles, bootlegs, directos… y sus temas/pistas. | Pendiente |
 | **6 — Conciertos** | Giras, fechas, salas, setlists. | Pendiente |
 | **7 — Libros** | Bibliografía relacionada. | Pendiente |
-
-### Detalle de la Fase 3 — flujo de tokens
-
-| Pieza | Fichero | Qué aporta |
-|---|---|---|
-| 1 · Primitivas | `app/core/security.py` | argon2 (hash/verify), JWT access token, generar/hashear refresh token |
-| 2 · Modelo | `app/modules/auth/models.py` → `RefreshToken` | tabla `refresh_tokens` (hash único, FK a `users`, expiración, flag revocado) |
-| 3 · Rotación | `app/modules/auth/service.py` | crear · validar · **rotar (atómico)** · revocar refresh tokens |
