@@ -1,0 +1,34 @@
+# Postgres local para DESARROLLO.
+#
+# Levanta una base de datos PostgreSQL igual a la de produccion, para poder
+# probar migraciones y comportamiento real (tipos, constraints, CASCADE...) en
+# vez de SQLite. Las credenciales de aqui son SOLO para dev local: no son
+# secretos y no deben usarse en produccion.
+#
+#   docker compose up -d        # levantar en segundo plano
+#   docker compose down         # parar (conserva los datos en el volumen)
+#   docker compose down -v      # parar y BORRAR los datos (empezar de cero)
+
+services:
+  db:
+    image: postgres:17
+    container_name: ommadawn-db
+    environment:
+      POSTGRES_USER: ommadawn
+      POSTGRES_PASSWORD: ommadawn
+      POSTGRES_DB: ommadawn
+    ports:
+      # host:contenedor. Expone Postgres en localhost:5432.
+      - "5432:5432"
+    volumes:
+      # Los datos persisten aqui entre reinicios (hasta `down -v`).
+      - ommadawn_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # Marca el contenedor como "healthy" cuando Postgres acepta conexiones.
+      test: ["CMD-SHELL", "pg_isready -U ommadawn -d ommadawn"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  ommadawn_pgdata:

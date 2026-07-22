@@ -13,11 +13,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.core.config import get_settings
-from app.core.database import Base, engine
-
-# Importamos los modelos para que se registren en Base.metadata. Sin este
-# import, `create_all` (y Alembic) no "verian" las tablas `users`/`refresh_tokens`.
-from app.modules.auth import models as _auth_models  # noqa: F401
 from app.modules.auth.router import router as auth_router
 
 settings = get_settings()
@@ -57,12 +52,10 @@ TAGS_METADATA = [
 async def lifespan(app: FastAPI):
     """Codigo que corre al arrancar y al apagar el servidor.
 
-    En DESARROLLO creamos las tablas automaticamente a partir de los modelos.
-    En PRODUCCION esto se sustituye por migraciones Alembic (el esquema no se
-    crea "magicamente", se versiona).
+    El esquema de la base de datos lo gestiona SIEMPRE Alembic (igual en dev que
+    en produccion): antes de arrancar la app se corre `alembic upgrade head`. No
+    creamos tablas "magicamente" aqui para que dev y prod no diverjan.
     """
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
     yield
     # (aqui iria codigo de limpieza al apagar, si hiciera falta)
 

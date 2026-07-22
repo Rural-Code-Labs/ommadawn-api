@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Qué es este proyecto
 
-`ommadawn_api` es una **API REST** que cataloga la obra de **Mike Oldfield**: discografía
+`ommadawn-api` es una **API REST** que cataloga la obra de **Mike Oldfield**: discografía
 (álbumes de estudio, recopilatorios, singles, directos, bootlegs…), conciertos, libros y
 otras secciones que se irán definiendo.
 
@@ -80,7 +80,7 @@ un cambio incompatible implica una nueva versión (`/api/v2`), no romper la exis
 > construir (patrón inspirado en `identity_service`, adaptado a monolito modular).
 
 ```
-ommadawn_api/
+ommadawn-api/
 ├── app/
 │   ├── main.py                 # App FastAPI, lifespan, montaje de routers de cada módulo
 │   ├── core/
@@ -119,6 +119,11 @@ pip install -e ".[dev]"
 cp .env.example .env
 python3 -c "import secrets; print(secrets.token_urlsafe(64))"   # generar SECRET_KEY
 
+# Base de datos local (PostgreSQL en Docker)
+docker compose up -d                            # levantar Postgres (localhost:5432)
+docker compose down                             # parar (conserva datos)
+docker compose down -v                          # parar y BORRAR datos (empezar de cero)
+
 # Arrancar el servidor (docs interactivas en http://localhost:8000/docs)
 uvicorn app.main:app --reload
 
@@ -132,8 +137,9 @@ alembic upgrade head
 alembic history
 ```
 
-En **desarrollo** las tablas pueden crearse al arrancar; en **producción** el esquema se
-gestiona siempre con Alembic.
+El esquema lo gestiona **siempre Alembic**, igual en desarrollo que en producción: la app
+no crea tablas al arrancar. Tras tocar un modelo: `alembic revision --autogenerate` y luego
+`alembic upgrade head`. En desarrollo se usa un PostgreSQL local vía `docker compose`.
 
 ---
 
@@ -163,5 +169,5 @@ solo sirve de referencia de estilo) y se reparte en varias fases:
 
 `../microservices/identity_service` es un microservicio FastAPI async ya funcional (auth con
 JWT + refresh rotativo). **Se usa como referencia de estilo y patrones**, pero el auth de
-`ommadawn_api` se escribe de cero e integrado como módulo interno, no se consume como servicio
+`ommadawn-api` se escribe de cero e integrado como módulo interno, no se consume como servicio
 externo.

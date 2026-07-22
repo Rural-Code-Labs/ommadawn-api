@@ -63,7 +63,7 @@ cambio incompatible implica una nueva versión (`/api/v2`), no romper la existen
 ## Estructura del proyecto
 
 ```
-ommadawn_api/
+ommadawn-api/
 ├── app/
 │   ├── main.py                 # App FastAPI, lifespan, montaje de routers
 │   ├── core/
@@ -78,9 +78,14 @@ ommadawn_api/
 │           ├── service.py      # Lógica: registro, login, tokens, rotación
 │           ├── dependencies.py # get_current_user (protege endpoints)
 │           └── router.py       # Endpoints /api/v1/auth/*
+├── migrations/                 # Alembic: env.py (async) + versions/
+│   ├── env.py                  # Lee la URL de Settings, expone Base.metadata
+│   └── versions/               # Una migración por cambio de esquema
 ├── tests/
 │   ├── conftest.py             # Fixtures (cliente HTTP + BD en memoria)
 │   └── test_auth.py            # Tests de integración de auth
+├── docker-compose.yml          # PostgreSQL local para desarrollo
+├── alembic.ini                 # Config de Alembic
 ├── .env.example
 └── pyproject.toml
 ```
@@ -100,9 +105,18 @@ cp .env.example .env
 python3 -c "import secrets; print(secrets.token_urlsafe(64))"   # generar SECRET_KEY
 # …y pégala en la variable SECRET_KEY de tu .env
 
+# Base de datos: levantar el PostgreSQL local (Docker)
+docker compose up -d          # Postgres en localhost:5432
+alembic upgrade head          # crea/actualiza el esquema
+
 # Arrancar el servidor
 uvicorn app.main:app --reload
 ```
+
+> **Base de datos en desarrollo.** Se usa un PostgreSQL local vía Docker
+> (`docker compose up -d`), igual motor que en producción, para probar
+> migraciones y comportamiento real. La `DATABASE_URL` del `.env` ya apunta a él;
+> si prefieres no usar Docker, hay una línea comentada con SQLite.
 
 Con el servidor en marcha, FastAPI genera la documentación de la API sola:
 
@@ -112,8 +126,11 @@ Con el servidor en marcha, FastAPI genera la documentación de la API sola:
 | http://localhost:8000/redoc | **ReDoc** — documentación de lectura/referencia |
 | http://localhost:8000/openapi.json | **Contrato OpenAPI** — fuente para generar clientes (p. ej. el de iOS con `swift-openapi-generator`) |
 
-En **desarrollo** las tablas se crean solas al arrancar (`create_all`); en
-**producción** el esquema se gestiona siempre con migraciones Alembic.
+El esquema de la base de datos lo gestiona **siempre Alembic**, igual en
+desarrollo que en producción: tras cambiar un modelo se genera una migración
+(`alembic revision --autogenerate -m "..."`) y se aplica (`alembic upgrade
+head`). La app no crea tablas "mágicamente" al arrancar, para que dev y prod no
+diverjan.
 
 ### Tests
 
