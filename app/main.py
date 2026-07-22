@@ -16,8 +16,9 @@ from app.core.config import get_settings
 from app.core.database import Base, engine
 
 # Importamos los modelos para que se registren en Base.metadata. Sin este
-# import, `create_all` (y Alembic) no "verian" la tabla `users`.
+# import, `create_all` (y Alembic) no "verian" las tablas `users`/`refresh_tokens`.
 from app.modules.auth import models as _auth_models  # noqa: F401
+from app.modules.auth.router import router as auth_router
 
 settings = get_settings()
 
@@ -50,6 +51,6 @@ async def health() -> dict[str, str]:
 
 
 # --- Routers de los modulos ---
-# A medida que construyamos cada modulo se montara aqui, por ejemplo:
-#   from app.modules.auth.router import router as auth_router
-#   app.include_router(auth_router, prefix="/api/v1")
+# Cada modulo cuelga de /api/v1. El router de auth anade su propio /auth, asi que
+# sus rutas finales son /api/v1/auth/...
+app.include_router(auth_router, prefix="/api/v1")

@@ -69,12 +69,18 @@ ommadawn_api/
 │   ├── core/
 │   │   ├── config.py           # Settings vía pydantic-settings (.env)
 │   │   ├── database.py         # Engine async, sesión, Base ORM, get_session
-│   │   └── security.py         # argon2 (hashing) + JWT + refresh tokens
+│   │   ├── security.py         # argon2 (hashing) + JWT + refresh tokens
+│   │   └── exceptions.py       # HTTPExceptions reutilizables
 │   └── modules/
 │       └── auth/
 │           ├── models.py       # User, RefreshToken
-│           └── service.py      # Lógica de tokens (crear, validar, rotar, revocar)
+│           ├── schemas.py      # Contratos Pydantic (request/response)
+│           ├── service.py      # Lógica: registro, login, tokens, rotación
+│           ├── dependencies.py # get_current_user (protege endpoints)
+│           └── router.py       # Endpoints /api/v1/auth/*
 ├── tests/
+│   ├── conftest.py             # Fixtures (cliente HTTP + BD en memoria)
+│   └── test_auth.py            # Tests de integración de auth
 ├── .env.example
 └── pyproject.toml
 ```
@@ -129,6 +135,18 @@ Se manejan **dos tokens con roles distintos**:
   de forma atómica. Un token robado deja de servir en cuanto el usuario legítimo
   renueva.
 
+### Endpoints
+
+| Método | Ruta | Protegido | Descripción |
+|---|---|---|---|
+| `POST` | `/api/v1/auth/register` | — | Crea un usuario (devuelve el perfil, `201`) |
+| `POST` | `/api/v1/auth/login` | — | Login por username **o** email; devuelve el par de tokens |
+| `POST` | `/api/v1/auth/refresh` | — | Rota el refresh token y emite un par nuevo |
+| `POST` | `/api/v1/auth/logout` | 🔒 | Revoca el refresh token (`204`) |
+| `GET` | `/api/v1/auth/me` | 🔒 | Devuelve el usuario autenticado |
+
+🔒 = requiere `Authorization: Bearer <access token>`.
+
 ### Flujo: del login al logout
 
 ```mermaid
@@ -170,7 +188,7 @@ antes de empezar la siguiente.
 | **1 — Esqueleto** | Estructura del proyecto, capa `core/` (config, base de datos, `Base` ORM) y app FastAPI con `/health`. | ✅ Hecha |
 | **2 — Modelo de usuario** | Model ORM `User`: login por username o email (únicos), `full_name` y `hashed_password` opcionales (preparado para OAuth), `is_active`, `is_admin`, timestamps. | ✅ Hecha |
 | **3 — Flujo de tokens** | Hashing argon2, JWT access token y refresh token con rotación. | ✅ Hecha |
-| **4 — Endpoints de auth** | `register`, `login`, `refresh`, `logout`, `me` + tests de integración. Cierra el bloque de auth. | ⏭️ Siguiente |
-| **5 — Discografía** | Álbumes de estudio, recopilatorios, singles, bootlegs, directos… y sus temas/pistas. | Pendiente |
+| **4 — Endpoints de auth** | `register`, `login`, `refresh`, `logout`, `me` + tests de integración. Cierra el bloque de auth. | ✅ Hecha |
+| **5 — Discografía** | Álbumes de estudio, recopilatorios, singles, bootlegs, directos… y sus temas/pistas. | ⏭️ Siguiente |
 | **6 — Conciertos** | Giras, fechas, salas, setlists. | Pendiente |
 | **7 — Libros** | Bibliografía relacionada. | Pendiente |

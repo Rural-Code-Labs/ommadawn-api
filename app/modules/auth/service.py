@@ -13,12 +13,26 @@ Recordatorio del diseno:
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.security import generate_refresh_token, hash_refresh_token
-from app.modules.auth.models import RefreshToken
+from app.core.exceptions import (
+    credentials_exception,
+    email_taken_exception,
+    inactive_user_exception,
+    invalid_refresh_token_exception,
+    username_taken_exception,
+)
+from app.core.security import (
+    create_access_token,
+    generate_refresh_token,
+    hash_password,
+    hash_refresh_token,
+    verify_password,
+)
+from app.modules.auth.models import RefreshToken, User
+from app.modules.auth.schemas import TokenPair, UserCreate
 
 settings = get_settings()
 
@@ -108,3 +122,93 @@ async def revoke_refresh_token(session: AsyncSession, token: str) -> bool:
     current.revoked = True
     await session.commit()
     return True
+
+
+# --- Usuarios: registro, login y renovacion -----------------------------------
+
+
+async def _get_by_username_or_email(
+    session: AsyncSession, identifier: str
+) -> User | None:
+    """Busca un usuario cuyo username O email coincida con `identifier`."""
+    result = await session.execute(
+        select(User).where(
+            or_(User.username == identifier, User.email == identifier)
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def register_user(session: AsyncSession, data: UserCreate) -> User:
+    """Registra un usuario nuevo. Devuelve el `User` creado (objeto ORM).
+
+    Comprueba que ni el username ni el email esten ya en uso, hashea la
+    contrasena con argon2 y persiste. La restriccion UNIQUE de la BD es la red de
+    seguridad final ante una posible condicion de carrera entre el check y el
+    insert; estas comprobaciones dan un error 409 claro en el caso normal.
+    """
+    existing = await _get_by_username_or_email(session, data.username)
+    if existing is not None:
+        raise username_taken_exception
+    if await _get_by_username_or_email(session, data.email) is not None:
+        raise email_taken_exception
+
+    user = User(
+        username=data.username,
+        email=data.email,
+        full_name=data.full_name,
+        hashed_password=hash_password(data.password),
+    )
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)  # recarga la fila para traer id, created_at, etc.
+    return user
+
+
+async def login_user(
+    session: AsyncSession, username_or_email: str, password: str
+) -> TokenPair:
+    """Valida credenciales y devuelve un par de tokens nuevo.
+
+    Si el usuario no existe O la contrasena falla, se lanza el MISMO error
+    generico (401) para no revelar que usuarios existen. `hashed_password` puede
+    ser None (usuario que en el futuro entre solo por OAuth): en ese caso no hay
+    login por contrasena posible.
+    """
+    user = await _get_by_username_or_email(session, username_or_email)
+    if (
+        user is None
+        or user.hashed_password is None
+        or not verify_password(password, user.hashed_password)
+    ):
+        raise credentials_exception
+    if not user.is_active:
+        raise inactive_user_exception
+
+    return TokenPair(
+        access_token=create_access_token(user.id),
+        refresh_token=await create_refresh_token(session, user.id),
+    )
+
+
+async def refresh_tokens(session: AsyncSession, refresh_token: str) -> TokenPair:
+    """Renueva la sesion: valida el refresh token, lo rota y emite tokens nuevos.
+
+    Antes de rotar comprobamos que el usuario siga activo: asi no revocamos el
+    token viejo (dejando la sesion a medias) si la cuenta esta desactivada.
+    """
+    current = await get_valid_refresh_token(session, refresh_token)
+    if current is None:
+        raise invalid_refresh_token_exception
+
+    user = await session.get(User, current.user_id)
+    if user is None or not user.is_active:
+        raise inactive_user_exception
+
+    # A partir de aqui la rotacion (revocar el viejo + emitir uno nuevo) es atomica.
+    _, new_refresh_token = await rotate_refresh_token(session, refresh_token)  # type: ignore[misc]
+
+    return TokenPair(
+        access_token=create_access_token(user.id),
+        refresh_token=new_refresh_token,
+    )
