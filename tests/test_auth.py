@@ -7,7 +7,12 @@ marcar cada test: pytest-asyncio los detecta por ser `async def`.
 
 from httpx import AsyncClient
 
+from app.core.config import get_settings
+
 BASE = "/api/v1/auth"
+
+# Vida esperada del access token (segundos), derivada de la config real.
+EXPECTED_EXPIRES_IN = get_settings().access_token_expire_minutes * 60
 
 # Credenciales de ejemplo reutilizadas en los tests.
 CREDS = {
@@ -84,6 +89,8 @@ async def test_login_with_username(client: AsyncClient):
     body = resp.json()
     assert body["token_type"] == "bearer"
     assert body["access_token"] and body["refresh_token"]
+    # La respuesta anuncia la vida del access token para renovar de forma proactiva.
+    assert body["expires_in"] == EXPECTED_EXPIRES_IN
 
 
 async def test_login_with_email(client: AsyncClient):
@@ -146,9 +153,12 @@ async def test_refresh_rotates_and_invalidates_old_token(client: AsyncClient):
 
     resp = await client.post(f"{BASE}/refresh", json={"refresh_token": old_refresh})
     assert resp.status_code == 200
-    new_refresh = resp.json()["refresh_token"]
+    body = resp.json()
+    new_refresh = body["refresh_token"]
     # El refresh token es aleatorio: el nuevo siempre es distinto del anterior.
     assert new_refresh != old_refresh
+    # Refresh tambien anuncia la vida del nuevo access token.
+    assert body["expires_in"] == EXPECTED_EXPIRES_IN
 
     # Reusar el refresh viejo (ya rotado) debe fallar: es la deteccion basica.
     reuse = await client.post(f"{BASE}/refresh", json={"refresh_token": old_refresh})

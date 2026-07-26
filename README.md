@@ -162,6 +162,9 @@ Se manejan **dos tokens con roles distintos**:
 - **Detección de reúso**: si un refresh token **ya rotado** reaparece (señal de
   que hay dos copias circulando → robo), se revoca **toda la sesión** del usuario
   y se le obliga a volver a iniciar sesión con contraseña.
+- **`expires_in`**: `login` y `refresh` devuelven la vida del access token en
+  segundos (p. ej. `900`), para que el cliente pueda renovar de forma **proactiva**
+  antes de que caduque, en vez de esperar a un `401`.
 
 ### Endpoints
 

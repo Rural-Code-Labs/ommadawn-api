@@ -75,8 +75,15 @@ class TokenPair(BaseModel):
 
     `token_type="bearer"` es la convencion HTTP: le dice al cliente que el access
     token se envia en la cabecera `Authorization: Bearer <token>`.
+
+    `expires_in` es la vida del access token en SEGUNDOS. Con ella el cliente
+    puede renovar de forma PROACTIVA (antes de que caduque) en vez de esperar a
+    un 401. Es un campo aditivo: los clientes que no lo miren siguen funcionando.
     """
 
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
+    expires_in: int = Field(
+        description="Segundos de vida del access token (p. ej. 900 = 15 min).",
+    )

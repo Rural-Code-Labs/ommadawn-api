@@ -36,6 +36,11 @@ from app.modules.auth.schemas import TokenPair, UserCreate
 
 settings = get_settings()
 
+# Vida del access token en segundos. Es justo lo que dura el JWT (su `exp` se
+# calcula con los mismos minutos en core/security.py), y se expone al cliente en
+# `TokenPair.expires_in` para que pueda renovar de forma proactiva.
+ACCESS_TOKEN_EXPIRES_IN = settings.access_token_expire_minutes * 60
+
 
 def _build_refresh_token(session: AsyncSession, user_id: int) -> str:
     """Construye una fila de refresh token y la anade a la sesion, SIN confirmar.
@@ -214,6 +219,7 @@ async def login_user(
     return TokenPair(
         access_token=create_access_token(user.id),
         refresh_token=await create_refresh_token(session, user.id),
+        expires_in=ACCESS_TOKEN_EXPIRES_IN,
     )
 
 
@@ -254,4 +260,5 @@ async def refresh_tokens(session: AsyncSession, refresh_token: str) -> TokenPair
     return TokenPair(
         access_token=create_access_token(user.id),
         refresh_token=new_refresh_token,
+        expires_in=ACCESS_TOKEN_EXPIRES_IN,
     )
