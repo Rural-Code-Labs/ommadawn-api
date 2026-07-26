@@ -16,7 +16,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
-from app.core.exceptions import credentials_exception
+from app.core.exceptions import admin_required_exception, credentials_exception
 from app.core.security import decode_access_token
 from app.modules.auth.models import User
 
@@ -56,3 +56,16 @@ async def get_current_user(
         raise credentials_exception
 
     return user
+
+
+async def require_admin(current_user: User = Depends(get_current_user)) -> User:
+    """Exige que el usuario autenticado sea ademas administrador.
+
+    Se apoya en `get_current_user` (asi que tambien exige un access token
+    valido). Es lo que usan los endpoints de ESCRITURA de los modulos de
+    catalogo (Fase 5 en adelante): crear/editar un `Release` exige ser admin,
+    aunque leer el catalogo sea publico.
+    """
+    if not current_user.is_admin:
+        raise admin_required_exception
+    return current_user

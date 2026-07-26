@@ -45,6 +45,14 @@ inactive_user_exception = HTTPException(
     detail="Usuario inactivo",
 )
 
+# 403 -> el usuario esta autenticado, pero no es administrador. La usan los
+# endpoints de escritura de los modulos de catalogo (discografia, conciertos...):
+# leer es publico, curar el contenido exige ser admin.
+admin_required_exception = HTTPException(
+    status_code=status.HTTP_403_FORBIDDEN,
+    detail="Se requieren permisos de administrador",
+)
+
 # 409 Conflict -> intentar registrar algo que ya existe. Separamos username de
 # email para que la app pueda decirle al usuario que campo cambiar.
 username_taken_exception = HTTPException(

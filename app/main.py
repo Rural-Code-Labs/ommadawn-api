@@ -15,6 +15,7 @@ from fastapi import FastAPI
 from app.core.config import get_settings
 from app.core.openapi import use_ios_friendly_openapi
 from app.modules.auth.router import router as auth_router
+from app.modules.discography.router import router as discography_router
 
 settings = get_settings()
 
@@ -41,6 +42,13 @@ TAGS_METADATA = [
     {
         "name": "auth",
         "description": "Registro, inicio de sesion y gestion de la sesion (tokens).",
+    },
+    {
+        "name": "discography",
+        "description": (
+            "Catalogo de publicaciones (discos de estudio, recopilatorios, "
+            "singles, bootlegs) y sus temas."
+        ),
     },
     {
         "name": "health",
@@ -83,6 +91,8 @@ async def health() -> dict[str, str]:
 
 
 # --- Routers de los modulos ---
-# Cada modulo cuelga de /api/v1. El router de auth anade su propio /auth, asi que
-# sus rutas finales son /api/v1/auth/...
+# Cada modulo cuelga de /api/v1 y anade su propio sub-prefijo (/auth,
+# /discography...), asi que las rutas finales son /api/v1/auth/...,
+# /api/v1/discography/...
 app.include_router(auth_router, prefix="/api/v1")
+app.include_router(discography_router, prefix="/api/v1")
