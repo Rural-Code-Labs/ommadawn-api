@@ -71,7 +71,8 @@ ommadawn-api/
 │   │   ├── database.py         # Engine async, sesión, Base ORM, get_session
 │   │   ├── security.py         # argon2 (hashing) + JWT + refresh tokens
 │   │   ├── exceptions.py       # HTTPExceptions reutilizables
-│   │   └── openapi.py          # Post-proceso del openapi.json (opcionales aptos para iOS)
+│   │   ├── openapi.py          # Post-proceso del openapi.json (opcionales aptos para iOS)
+│   │   └── storage.py          # StorageBackend: Local (dev) ahora, GCS pendiente
 │   └── modules/
 │       ├── auth/
 │       │   ├── models.py       # User, RefreshToken
@@ -80,9 +81,9 @@ ommadawn-api/
 │       │   ├── dependencies.py # get_current_user, require_admin (protegen endpoints)
 │       │   └── router.py       # Endpoints /api/v1/auth/*
 │       └── discography/
-│           ├── models.py       # Release -> Edition (is_primary) -> Track
-│           ├── schemas.py      # Release/Edition/Track: Create, Read, Update
-│           ├── service.py      # CRUD anidado + demote de la edición principal
+│           ├── models.py       # Release -> Edition (is_primary) -> Track / Image
+│           ├── schemas.py      # Release/Edition/Track/Image: Create, Read, Update
+│           ├── service.py      # CRUD anidado + demotes + subida de imágenes
 │           └── router.py       # Endpoints /api/v1/discography/*
 ├── migrations/                 # Alembic: env.py (async) + versions/
 │   ├── env.py                  # Lee la URL de Settings, expone Base.metadata
@@ -223,7 +224,8 @@ Discos, recopilatorios, singles y bootlegs se catalogan en tres niveles:
 ```
 Release   (la obra: "Tubular Bells", con su tipo)
   └── Edition   (una publicación concreta: país, sello, fecha, is_primary)
-        └── Track   (la tracklist de esa edición)
+        ├── Track   (la tracklist de esa edición)
+        └── Image   (portada, contraportada... de esa edición)
 ```
 
 Un mismo disco puede tener varias ediciones (la original, una reedición remasterizada,
@@ -242,9 +244,16 @@ Leer el catálogo es **público**; crear, editar o borrar exige ser **administra
 | `PATCH` / `DELETE` | `/api/v1/discography/releases/{id}` | 🔒👑 | Edita o borra una obra |
 | `POST` | `/api/v1/discography/releases/{id}/editions` | 🔒👑 | Añade una edición (con su tracklist) a una obra |
 | `PATCH` / `DELETE` | `/api/v1/discography/releases/{id}/editions/{edition_id}` | 🔒👑 | Edita o borra una edición |
+| `POST` | `.../editions/{edition_id}/images` | 🔒👑 | Sube una imagen (`multipart/form-data`: `image_type` + `file`) |
+| `DELETE` | `.../editions/{edition_id}/images/{image_id}` | 🔒👑 | Borra una imagen |
 
 🔒👑 = requiere `Authorization: Bearer <access token>` de un usuario **administrador**
 (`is_admin=True`; se marca directamente en BD, no hay endpoint público para ello).
+
+**Imágenes**: solo se guarda la `url` en la base de datos, nunca los bytes. En desarrollo
+se sirven desde disco local (`/media`, fuera de `/api/v1`); en producción será un bucket de
+Google Cloud Storage (pendiente), elegido por `STORAGE_BACKEND` en `.env` sin tocar código.
+Subir una `front_cover`/`back_cover` nueva **sustituye** la anterior; `other` se acumula.
 
 ---
 

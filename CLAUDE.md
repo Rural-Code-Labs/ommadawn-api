@@ -123,7 +123,8 @@ ommadawn-api/
 │   │   ├── database.py         # Engine async, sesión, Base ORM, dependencia get_session
 │   │   ├── security.py         # argon2 (hashing) + PyJWT + refresh tokens
 │   │   ├── exceptions.py       # HTTPExceptions reutilizables
-│   │   └── openapi.py          # Post-proceso del openapi.json (opcionales aptos para iOS)
+│   │   ├── openapi.py          # Post-proceso del openapi.json (opcionales aptos para iOS)
+│   │   └── storage.py          # StorageBackend (Local ahora; GCS pendiente)
 │   └── modules/
 │       ├── auth/               # ✅ Fases 2-4 (bloque cerrado)
 │       │   ├── models.py       # User, RefreshToken
@@ -131,10 +132,10 @@ ommadawn-api/
 │       │   ├── service.py      # Lógica: registro, login, tokens, rotación
 │       │   ├── dependencies.py # get_current_user, require_admin (protegen endpoints)
 │       │   └── router.py       # /api/v1/auth/*
-│       ├── discography/        # 🚧 Fase 5 en marcha (Release -> Edition -> Track)
-│       │   ├── models.py       # Release, Edition (is_primary), Track
-│       │   ├── schemas.py      # Release/Edition/Track Create/Read/Update
-│       │   ├── service.py      # CRUD anidado + _demote_other_primary_editions
+│       ├── discography/        # 🚧 Fase 5 en marcha (Release -> Edition -> Track/Image)
+│       │   ├── models.py       # Release, Edition (is_primary), Track, Image (ImageType)
+│       │   ├── schemas.py      # Release/Edition/Track/Image: Create, Read, Update
+│       │   ├── service.py      # CRUD anidado + demotes (primary, portada) + subida
 │       │   └── router.py       # /api/v1/discography/* (leer: público; escribir: admin)
 │       └── concerts/           # Fase 6 (futuro)
 ├── migrations/                 # Alembic: env.py (async) + versions/
@@ -236,9 +237,10 @@ Endpoints actuales:
 | Método | Ruta | Acceso |
 |---|---|---|
 | `GET` | `/api/v1/discography/releases` | Público (filtro `?type=`) |
-| `GET` | `/api/v1/discography/releases/{id}` | Público (con ediciones y temas anidados) |
+| `GET` | `/api/v1/discography/releases/{id}` | Público (con ediciones, temas e imágenes anidados) |
 | `POST` / `PATCH` / `DELETE` | `/api/v1/discography/releases[/{id}]` | Admin |
 | `POST` / `PATCH` / `DELETE` | `/api/v1/discography/releases/{id}/editions[/{edition_id}]` | Admin |
+| `POST` / `DELETE` | `.../editions/{edition_id}/images[/{image_id}]` | Admin |
 
 **`PATCH` (en `Release` y en `Edition`) es un PATCH de verdad**: usa
 `model_dump(exclude_unset=True)` para distinguir un campo *omitido* (no se toca) de uno
@@ -249,11 +251,32 @@ la colección hay que vaciarla y hacer `flush()` **antes** de añadir los temas 
 SQLAlchemy puede emitir los `INSERT` antes que los `DELETE` de los viejos y chocar con el
 `UNIQUE(edition_id, position)` cuando se repite un número de pista.
 
-**Pendiente, deliberadamente fuera de este remodelado**: portadas/contraportadas (`Image`,
-colgando de `Edition`) y el `StorageBackend` que las sirva (disco local en dev, Google Cloud
-Storage en producción, elegido por config como `DATABASE_URL`). Se construirá como paso
-siguiente, independiente de lo anterior — la base de datos solo guardará la URL de cada imagen,
-nunca los bytes.
+### Imágenes (portadas, contraportadas...) y almacenamiento
+
+`Image` cuelga de `Edition` (no de `Release`): la portada puede variar por edición. Solo guarda
+`image_type` (`front_cover` / `back_cover` / `other`) y la `url` — **la base de datos nunca
+guarda los bytes**, solo la URL que devuelve el backend de almacenamiento al subir el fichero.
+
+- **`app/core/storage.py`** define el puerto `StorageBackend` (`save`/`delete`), con
+  `LocalStorageBackend` como única implementación por ahora (disco local, servido por la propia
+  API en `/media`, fuera de `/api/v1` a propósito: no es un recurso JSON versionado). El backend
+  se elige por `Settings.storage_backend` (`.env`), igual que `database_url` elige el motor de
+  BD — cambiar a GCS en producción será tocar `.env` y añadir `GCSStorageBackend`, no los
+  endpoints. **GCS queda pendiente de implementar** hasta tener un proyecto/bucket real contra
+  el que probarlo (código no verificable no se escribe a ciegas).
+- Escribir a disco bloquea: `LocalStorageBackend` delega en `anyio.to_thread.run_sync` para no
+  congelar el *event loop* async.
+- **`front_cover`/`back_cover` se SUSTITUYEN al subir una nueva** (se borra la fila y el fichero
+  viejo antes de guardar el nuevo): el admin no acumula portadas sueltas, basta con volver a
+  subir para "reemplazar". `other` sí se acumula (varias páginas de un librillo, fotos sueltas).
+  No hay restricción `UNIQUE` en BD para esto — lo gestiona el `service`, igual que el *demote*
+  de `is_primary`.
+- Subida vía `multipart/form-data` (`UploadFile` + `Form`), primera vez que la API usa este
+  patrón (requiere la dependencia `python-multipart`). Content-type restringido a
+  JPEG/PNG/WEBP (422 si no) y tamaño máximo 10 MB (413 si se supera).
+- En los tests, `get_storage_backend` se sobreescribe (en `conftest.py::client`) para apuntar a
+  una carpeta temporal de pytest, no a la carpeta real de desarrollo (`./media`, en
+  `.gitignore`).
 
 ---
 
