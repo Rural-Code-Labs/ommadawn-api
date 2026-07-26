@@ -24,8 +24,9 @@ from app.core.database import Base
 
 # Importar los modelos de cada modulo REGISTRA sus tablas en `Base.metadata`.
 # Sin estos imports, autogenerate no "veria" las tablas y generaria migraciones
-# vacias. Al anadir un modulo nuevo (discografia, conciertos...), importalo aqui.
+# vacias. Al anadir un modulo nuevo (conciertos, libros...), importalo aqui.
 from app.modules.auth import models as _auth_models  # noqa: F401
+from app.modules.discography import models as _discography_models  # noqa: F401
 
 # Objeto de configuracion de Alembic (acceso a los valores de alembic.ini).
 config = context.config
