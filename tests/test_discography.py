@@ -1,8 +1,9 @@
 """Tests de integracion del modulo de discografia.
 
-Leer el catalogo es publico; crear exige ser administrador. Como no hay (a
-proposito) un endpoint publico para promover a alguien a admin, los tests que lo
-necesitan usan `db_session` para marcarlo directamente en la BD de prueba.
+Tres niveles: Release (la obra) -> Edition (una publicacion concreta) -> Track.
+Leer el catalogo es publico; crear/editar/borrar exige ser administrador. Como
+no hay (a proposito) un endpoint publico para promover a alguien a admin, los
+tests que lo necesitan usan `db_session` para marcarlo directamente en la BD.
 """
 
 from httpx import AsyncClient
@@ -26,11 +27,14 @@ FAN_CREDS = {
     "password": "fanpassword1",
 }
 
-# Payload de ejemplo: el primer disco de Mike Oldfield, con sus dos temas.
-TUBULAR_BELLS = {
-    "title": "Tubular Bells",
-    "release_type": "studio",
+TUBULAR_BELLS = {"title": "Tubular Bells", "release_type": "studio"}
+
+UK_1973_EDITION = {
+    "country": "Reino Unido",
+    "label": "Virgin Records",
+    "edition_name": "Edicion original",
     "release_date": "1973-05-25",
+    "is_primary": True,
     "tracks": [
         {"position": 1, "title": "Tubular Bells, Part One", "duration_seconds": 1548},
         {"position": 2, "title": "Tubular Bells, Part Two", "duration_seconds": 1350},
@@ -62,7 +66,13 @@ async def _admin_headers(client: AsyncClient, db_session: AsyncSession) -> dict:
     return await _login(client, ADMIN_CREDS["username"], ADMIN_CREDS["password"])
 
 
-# --- Lectura (publica) ----------------------------------------------------------
+async def _create_release(client: AsyncClient, headers: dict) -> int:
+    """Helper: crea la obra de ejemplo y devuelve su id."""
+    resp = await client.post(f"{BASE}/releases", json=TUBULAR_BELLS, headers=headers)
+    return resp.json()["id"]
+
+
+# --- Release: lectura (publica) --------------------------------------------------
 
 
 async def test_list_releases_starts_empty(client: AsyncClient):
@@ -76,7 +86,7 @@ async def test_get_unknown_release_returns_404(client: AsyncClient):
     assert resp.status_code == 404
 
 
-# --- Escritura: control de acceso ------------------------------------------------
+# --- Release: control de acceso ---------------------------------------------------
 
 
 async def test_create_release_requires_authentication(client: AsyncClient):
@@ -92,10 +102,10 @@ async def test_create_release_requires_admin(client: AsyncClient):
     assert resp.status_code == 403
 
 
-# --- Escritura: creacion con temas ------------------------------------------------
+# --- Release: creacion, edicion y borrado -----------------------------------------
 
 
-async def test_admin_can_create_release_with_tracks(
+async def test_admin_can_create_release_without_editions(
     client: AsyncClient, db_session: AsyncSession
 ):
     headers = await _admin_headers(client, db_session)
@@ -105,82 +115,24 @@ async def test_admin_can_create_release_with_tracks(
     body = resp.json()
     assert body["title"] == "Tubular Bells"
     assert body["release_type"] == "studio"
-    assert body["release_date"] == "1973-05-25"
-    assert [t["title"] for t in body["tracks"]] == [
-        "Tubular Bells, Part One",
-        "Tubular Bells, Part Two",
-    ]
+    assert body["editions"] == []
 
 
-async def test_create_release_rejects_duplicate_track_positions(
+async def test_update_release_only_touches_sent_fields(
     client: AsyncClient, db_session: AsyncSession
 ):
     headers = await _admin_headers(client, db_session)
-    payload = {
-        **TUBULAR_BELLS,
-        "tracks": [
-            {"position": 1, "title": "A"},
-            {"position": 1, "title": "B"},  # misma posicion que la anterior
-        ],
-    }
+    release_id = await _create_release(client, headers)
 
-    resp = await client.post(f"{BASE}/releases", json=payload, headers=headers)
-    assert resp.status_code == 422
-
-
-async def test_release_without_tracks_is_allowed(
-    client: AsyncClient, db_session: AsyncSession
-):
-    # Un bootleg del que aun no se ha catalogado la tracklist es un caso valido.
-    headers = await _admin_headers(client, db_session)
-    payload = {"title": "Unknown Bootleg", "release_type": "bootleg", "tracks": []}
-
-    resp = await client.post(f"{BASE}/releases", json=payload, headers=headers)
-    assert resp.status_code == 201
-    assert resp.json()["tracks"] == []
-
-
-# --- Lectura tras crear -----------------------------------------------------------
-
-
-async def test_get_release_by_id(client: AsyncClient, db_session: AsyncSession):
-    headers = await _admin_headers(client, db_session)
-    created = await client.post(f"{BASE}/releases", json=TUBULAR_BELLS, headers=headers)
-    release_id = created.json()["id"]
-
-    resp = await client.get(f"{BASE}/releases/{release_id}")
-    assert resp.status_code == 200
-    assert resp.json()["title"] == "Tubular Bells"
-
-
-async def test_list_releases_filters_by_type(
-    client: AsyncClient, db_session: AsyncSession
-):
-    headers = await _admin_headers(client, db_session)
-    await client.post(f"{BASE}/releases", json=TUBULAR_BELLS, headers=headers)
-    await client.post(
-        f"{BASE}/releases",
-        json={"title": "Boxed", "release_type": "compilation", "tracks": []},
+    resp = await client.patch(
+        f"{BASE}/releases/{release_id}",
+        json={"title": "Tubular Bells (nuevo titulo)"},
         headers=headers,
     )
-
-    resp = await client.get(f"{BASE}/releases", params={"type": "compilation"})
     assert resp.status_code == 200
     body = resp.json()
-    assert len(body) == 1
-    assert body[0]["title"] == "Boxed"
-
-
-# --- Edicion (PATCH) ---------------------------------------------------------------
-
-
-async def test_update_release_requires_admin(client: AsyncClient, db_session: AsyncSession):
-    headers = await _admin_headers(client, db_session)
-    created = await client.post(f"{BASE}/releases", json=TUBULAR_BELLS, headers=headers)
-    release_id = created.json()["id"]
-
-    resp = await client.patch(f"{BASE}/releases/{release_id}", json={"title": "Nuevo"})
-    assert resp.status_code == 401
+    assert body["title"] == "Tubular Bells (nuevo titulo)"
+    assert body["release_type"] == "studio"  # no enviado, no se toca
 
 
 async def test_update_unknown_release_returns_404(
@@ -193,36 +145,184 @@ async def test_update_unknown_release_returns_404(
     assert resp.status_code == 404
 
 
-async def test_update_only_touches_sent_fields(
+async def test_admin_can_delete_release(client: AsyncClient, db_session: AsyncSession):
+    headers = await _admin_headers(client, db_session)
+    release_id = await _create_release(client, headers)
+
+    resp = await client.delete(f"{BASE}/releases/{release_id}", headers=headers)
+    assert resp.status_code == 204
+
+    after = await client.get(f"{BASE}/releases/{release_id}")
+    assert after.status_code == 404
+
+
+async def test_list_releases_filters_by_type(
     client: AsyncClient, db_session: AsyncSession
 ):
     headers = await _admin_headers(client, db_session)
-    created = await client.post(f"{BASE}/releases", json=TUBULAR_BELLS, headers=headers)
-    release_id = created.json()["id"]
+    await client.post(f"{BASE}/releases", json=TUBULAR_BELLS, headers=headers)
+    await client.post(
+        f"{BASE}/releases",
+        json={"title": "Boxed", "release_type": "compilation"},
+        headers=headers,
+    )
+
+    resp = await client.get(f"{BASE}/releases", params={"type": "compilation"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body) == 1
+    assert body[0]["title"] == "Boxed"
+
+
+# --- Edition: control de acceso ---------------------------------------------------
+
+
+async def test_create_edition_requires_admin(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    release_id = await _create_release(client, headers)
+
+    resp = await client.post(f"{BASE}/releases/{release_id}/editions", json=UK_1973_EDITION)
+    assert resp.status_code == 401
+
+
+# --- Edition: creacion con temas ---------------------------------------------------
+
+
+async def test_admin_can_create_edition_with_tracks(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    release_id = await _create_release(client, headers)
+
+    resp = await client.post(
+        f"{BASE}/releases/{release_id}/editions", json=UK_1973_EDITION, headers=headers
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["country"] == "Reino Unido"
+    assert body["is_primary"] is True
+    assert [t["title"] for t in body["tracks"]] == [
+        "Tubular Bells, Part One",
+        "Tubular Bells, Part Two",
+    ]
+
+    # Y aparece anidada al leer la obra completa.
+    release = (await client.get(f"{BASE}/releases/{release_id}")).json()
+    assert len(release["editions"]) == 1
+    assert release["editions"][0]["country"] == "Reino Unido"
+
+
+async def test_create_edition_on_unknown_release_returns_404(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    resp = await client.post(
+        f"{BASE}/releases/999/editions", json=UK_1973_EDITION, headers=headers
+    )
+    assert resp.status_code == 404
+
+
+async def test_create_edition_rejects_duplicate_track_positions(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    release_id = await _create_release(client, headers)
+    payload = {
+        **UK_1973_EDITION,
+        "tracks": [{"position": 1, "title": "A"}, {"position": 1, "title": "B"}],
+    }
+
+    resp = await client.post(
+        f"{BASE}/releases/{release_id}/editions", json=payload, headers=headers
+    )
+    assert resp.status_code == 422
+
+
+async def test_edition_without_tracks_is_allowed(
+    client: AsyncClient, db_session: AsyncSession
+):
+    # Una edicion de la que aun no se ha catalogado la tracklist es valida.
+    headers = await _admin_headers(client, db_session)
+    release_id = await _create_release(client, headers)
+
+    resp = await client.post(
+        f"{BASE}/releases/{release_id}/editions",
+        json={"country": "Japon", "tracks": []},
+        headers=headers,
+    )
+    assert resp.status_code == 201
+    assert resp.json()["tracks"] == []
+
+
+# --- Edition: solo una principal por obra -----------------------------------------
+
+
+async def test_marking_a_new_edition_primary_demotes_the_previous_one(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    release_id = await _create_release(client, headers)
+
+    first = await client.post(
+        f"{BASE}/releases/{release_id}/editions", json=UK_1973_EDITION, headers=headers
+    )
+    assert first.json()["is_primary"] is True
+
+    second = await client.post(
+        f"{BASE}/releases/{release_id}/editions",
+        json={**UK_1973_EDITION, "country": "Japon", "is_primary": True, "tracks": []},
+        headers=headers,
+    )
+    assert second.status_code == 201
+    assert second.json()["is_primary"] is True
+
+    # La primera ha quedado desmarcada automaticamente: no hace falta que el
+    # admin lo gestione a mano ni se viola el indice unico parcial.
+    release = (await client.get(f"{BASE}/releases/{release_id}")).json()
+    primaries = [e for e in release["editions"] if e["is_primary"]]
+    assert len(primaries) == 1
+    assert primaries[0]["country"] == "Japon"
+
+
+# --- Edition: edicion (PATCH) ------------------------------------------------------
+
+
+async def test_update_edition_only_touches_sent_fields(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    release_id = await _create_release(client, headers)
+    created = await client.post(
+        f"{BASE}/releases/{release_id}/editions", json=UK_1973_EDITION, headers=headers
+    )
+    edition_id = created.json()["id"]
 
     resp = await client.patch(
-        f"{BASE}/releases/{release_id}",
-        json={"title": "Tubular Bells (remaster)"},
+        f"{BASE}/releases/{release_id}/editions/{edition_id}",
+        json={"label": "Virgin Records (reedicion)"},
         headers=headers,
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["title"] == "Tubular Bells (remaster)"
-    # Campos NO enviados no se tocan: el tipo y los temas siguen igual.
-    assert body["release_type"] == "studio"
-    assert len(body["tracks"]) == 2
+    assert body["label"] == "Virgin Records (reedicion)"
+    assert body["country"] == "Reino Unido"  # no enviado, no se toca
+    assert len(body["tracks"]) == 2  # tampoco se tocan
 
 
-async def test_update_can_clear_a_nullable_field(
+async def test_update_edition_can_clear_a_nullable_field(
     client: AsyncClient, db_session: AsyncSession
 ):
     headers = await _admin_headers(client, db_session)
-    created = await client.post(f"{BASE}/releases", json=TUBULAR_BELLS, headers=headers)
-    release_id = created.json()["id"]
+    release_id = await _create_release(client, headers)
+    created = await client.post(
+        f"{BASE}/releases/{release_id}/editions", json=UK_1973_EDITION, headers=headers
+    )
+    edition_id = created.json()["id"]
 
-    # Enviar release_date=null borra la fecha (distinto de omitirla).
     resp = await client.patch(
-        f"{BASE}/releases/{release_id}",
+        f"{BASE}/releases/{release_id}/editions/{edition_id}",
         json={"release_date": None},
         headers=headers,
     )
@@ -230,15 +330,18 @@ async def test_update_can_clear_a_nullable_field(
     assert resp.json()["release_date"] is None
 
 
-async def test_update_with_tracks_replaces_the_whole_tracklist(
+async def test_update_edition_with_tracks_replaces_the_whole_tracklist(
     client: AsyncClient, db_session: AsyncSession
 ):
     headers = await _admin_headers(client, db_session)
-    created = await client.post(f"{BASE}/releases", json=TUBULAR_BELLS, headers=headers)
-    release_id = created.json()["id"]
+    release_id = await _create_release(client, headers)
+    created = await client.post(
+        f"{BASE}/releases/{release_id}/editions", json=UK_1973_EDITION, headers=headers
+    )
+    edition_id = created.json()["id"]
 
     resp = await client.patch(
-        f"{BASE}/releases/{release_id}",
+        f"{BASE}/releases/{release_id}/editions/{edition_id}",
         json={"tracks": [{"position": 1, "title": "Version unica"}]},
         headers=headers,
     )
@@ -248,49 +351,55 @@ async def test_update_with_tracks_replaces_the_whole_tracklist(
     assert tracks[0]["title"] == "Version unica"
 
 
-async def test_update_rejects_duplicate_track_positions(
+async def test_update_unknown_edition_returns_404(
     client: AsyncClient, db_session: AsyncSession
 ):
     headers = await _admin_headers(client, db_session)
-    created = await client.post(f"{BASE}/releases", json=TUBULAR_BELLS, headers=headers)
-    release_id = created.json()["id"]
+    release_id = await _create_release(client, headers)
 
     resp = await client.patch(
-        f"{BASE}/releases/{release_id}",
-        json={"tracks": [{"position": 1, "title": "A"}, {"position": 1, "title": "B"}]},
+        f"{BASE}/releases/{release_id}/editions/999",
+        json={"label": "X"},
         headers=headers,
     )
-    assert resp.status_code == 422
-
-
-# --- Borrado (DELETE) --------------------------------------------------------------
-
-
-async def test_delete_release_requires_admin(client: AsyncClient, db_session: AsyncSession):
-    headers = await _admin_headers(client, db_session)
-    created = await client.post(f"{BASE}/releases", json=TUBULAR_BELLS, headers=headers)
-    release_id = created.json()["id"]
-
-    resp = await client.delete(f"{BASE}/releases/{release_id}")
-    assert resp.status_code == 401
-
-
-async def test_delete_unknown_release_returns_404(
-    client: AsyncClient, db_session: AsyncSession
-):
-    headers = await _admin_headers(client, db_session)
-    resp = await client.delete(f"{BASE}/releases/999", headers=headers)
     assert resp.status_code == 404
 
 
-async def test_admin_can_delete_release(client: AsyncClient, db_session: AsyncSession):
+async def test_edition_from_another_release_is_not_reachable(
+    client: AsyncClient, db_session: AsyncSession
+):
+    # Una edicion existe, pero bajo OTRA obra: no debe poder editarse mezclando ids.
     headers = await _admin_headers(client, db_session)
-    created = await client.post(f"{BASE}/releases", json=TUBULAR_BELLS, headers=headers)
-    release_id = created.json()["id"]
+    release_id = await _create_release(client, headers)
+    other_release_id = await _create_release(client, headers)
+    created = await client.post(
+        f"{BASE}/releases/{release_id}/editions", json=UK_1973_EDITION, headers=headers
+    )
+    edition_id = created.json()["id"]
 
-    resp = await client.delete(f"{BASE}/releases/{release_id}", headers=headers)
+    resp = await client.patch(
+        f"{BASE}/releases/{other_release_id}/editions/{edition_id}",
+        json={"label": "X"},
+        headers=headers,
+    )
+    assert resp.status_code == 404
+
+
+# --- Edition: borrado ---------------------------------------------------------------
+
+
+async def test_admin_can_delete_edition(client: AsyncClient, db_session: AsyncSession):
+    headers = await _admin_headers(client, db_session)
+    release_id = await _create_release(client, headers)
+    created = await client.post(
+        f"{BASE}/releases/{release_id}/editions", json=UK_1973_EDITION, headers=headers
+    )
+    edition_id = created.json()["id"]
+
+    resp = await client.delete(
+        f"{BASE}/releases/{release_id}/editions/{edition_id}", headers=headers
+    )
     assert resp.status_code == 204
 
-    # Tras borrar, ya no existe.
-    after = await client.get(f"{BASE}/releases/{release_id}")
-    assert after.status_code == 404
+    release = (await client.get(f"{BASE}/releases/{release_id}")).json()
+    assert release["editions"] == []

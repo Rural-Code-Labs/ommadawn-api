@@ -1,7 +1,8 @@
 """Schemas (contratos) del modulo de discografia.
 
 Igual que en auth: los models ORM (`models.py`) nunca se exponen tal cual. Estos
-schemas son el contrato con la app movil.
+schemas son el contrato con la app movil, en los mismos tres niveles que los
+modelos: Release (la obra) -> Edition (una publicacion concreta) -> Track.
 """
 
 from datetime import date, datetime
@@ -14,72 +15,92 @@ from app.modules.discography.models import ReleaseType
 
 
 class TrackCreate(BaseModel):
-    """Datos de un tema al crear una publicacion (va anidado en ReleaseCreate)."""
+    """Datos de un tema al crear/editar una edicion (va anidado)."""
 
     position: int = Field(gt=0, description="Numero de pista (1, 2, 3...)")
     title: str = Field(min_length=1, max_length=200)
     duration_seconds: int | None = Field(default=None, gt=0)
 
 
-class ReleaseCreate(BaseModel):
-    """Datos para anadir una publicacion al catalogo (body de POST /releases).
+def _validate_unique_positions(tracks: list[TrackCreate] | None) -> None:
+    """Rechaza (422) dos temas con el mismo numero de posicion.
 
-    Los temas van ANIDADOS: se crea la publicacion y su lista de temas en una
-    unica peticion (ver `service.create_release`), porque asi es como se cura el
-    catalogo en la practica: un disco siempre trae su tracklist consigo.
+    Se valida aqui, antes de tocar la BD, en vez de dejar que lo atrape la
+    restriccion UNIQUE de la tabla: un 422 con un mensaje claro es mejor
+    experiencia que un 500 por un IntegrityError sin traducir. Compartida por
+    EditionCreate y EditionUpdate.
+    """
+    if not tracks:
+        return
+    positions = [t.position for t in tracks]
+    if len(positions) != len(set(positions)):
+        raise ValueError("Hay temas con el mismo numero de posicion")
+
+
+class EditionCreate(BaseModel):
+    """Datos para anadir una edicion a una obra (body de POST .../editions).
+
+    Los temas van ANIDADOS: se crea la edicion y su tracklist en una unica
+    peticion, porque asi es como se cura el catalogo en la practica.
+    """
+
+    country: str | None = Field(default=None, max_length=100)
+    label: str | None = Field(default=None, max_length=150)
+    edition_name: str | None = Field(default=None, max_length=200)
+    release_date: date | None = None
+    is_primary: bool = False
+    tracks: list[TrackCreate] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check_positions(self) -> "EditionCreate":
+        _validate_unique_positions(self.tracks)
+        return self
+
+
+class EditionUpdate(BaseModel):
+    """Datos para editar una edicion (body de PATCH .../editions/{id}).
+
+    PATCH de verdad: solo se aplican los campos PRESENTES en el body (el
+    service usa `model_dump(exclude_unset=True)`). `tracks`, si se envia,
+    REEMPLAZA toda la tracklist existente.
+    """
+
+    country: str | None = None
+    label: str | None = None
+    edition_name: str | None = None
+    release_date: date | None = None
+    is_primary: bool | None = None
+    tracks: list[TrackCreate] | None = None
+
+    @model_validator(mode="after")
+    def _check_positions(self) -> "EditionUpdate":
+        _validate_unique_positions(self.tracks)
+        return self
+
+
+class ReleaseCreate(BaseModel):
+    """Datos para anadir una obra al catalogo (body de POST /releases).
+
+    Solo el titulo y el tipo: una obra puede existir en el catalogo sin
+    ediciones todavia (se anaden despues via POST /releases/{id}/editions).
     """
 
     title: str = Field(min_length=1, max_length=200)
     release_type: ReleaseType
-    release_date: date | None = None
-    tracks: list[TrackCreate] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def _positions_are_unique(self) -> "ReleaseCreate":
-        """Rechaza (422) dos temas con el mismo numero de pista.
-
-        Se valida aqui, antes de tocar la BD, en vez de dejar que lo atrape la
-        restriccion UNIQUE de la tabla: un 422 con un mensaje claro es mejor
-        experiencia que un 500 por un IntegrityError sin traducir.
-        """
-        positions = [t.position for t in self.tracks]
-        if len(positions) != len(set(positions)):
-            raise ValueError("Hay temas con el mismo numero de posicion")
-        return self
 
 
 class ReleaseUpdate(BaseModel):
-    """Datos para editar una publicacion (body de PATCH /releases/{id}).
-
-    Es un PATCH de verdad: solo se aplican los campos PRESENTES en el body (el
-    service lo resuelve con `model_dump(exclude_unset=True)`). Un campo omitido
-    no se toca; uno enviado si se aplica, aunque sea `null` (p. ej. borrar una
-    `release_date` que resulto ser incierta).
-
-    `tracks`, si se incluye, REEMPLAZA toda la tracklist existente (aunque sea
-    una lista vacia). Si se omite, los temas actuales no se tocan.
-    """
+    """Datos para editar una obra (body de PATCH /releases/{id}). PATCH parcial."""
 
     title: str | None = Field(default=None, min_length=1, max_length=200)
     release_type: ReleaseType | None = None
-    release_date: date | None = None
-    tracks: list[TrackCreate] | None = None
-
-    @model_validator(mode="after")
-    def _positions_are_unique(self) -> "ReleaseUpdate":
-        """Misma regla que en ReleaseCreate, solo si se ha enviado `tracks`."""
-        if self.tracks:
-            positions = [t.position for t in self.tracks]
-            if len(positions) != len(set(positions)):
-                raise ValueError("Hay temas con el mismo numero de posicion")
-        return self
 
 
 # --- Salida (response) ---------------------------------------------------------
 
 
 class TrackRead(BaseModel):
-    """Vista publica de un tema (dentro de la respuesta de un Release)."""
+    """Vista publica de un tema."""
 
     id: int
     position: int
@@ -89,14 +110,27 @@ class TrackRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class EditionRead(BaseModel):
+    """Vista publica de una edicion, con su tracklist incluida."""
+
+    id: int
+    country: str | None
+    label: str | None
+    edition_name: str | None
+    release_date: date | None
+    is_primary: bool
+    tracks: list[TrackRead]
+
+    model_config = {"from_attributes": True}
+
+
 class ReleaseRead(BaseModel):
-    """Vista publica de una publicacion, con su lista de temas incluida."""
+    """Vista publica de una obra, con todas sus ediciones incluidas."""
 
     id: int
     title: str
     release_type: ReleaseType
-    release_date: date | None
     created_at: datetime
-    tracks: list[TrackRead]
+    editions: list[EditionRead]
 
     model_config = {"from_attributes": True}
