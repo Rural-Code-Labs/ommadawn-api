@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.core.config import get_settings
+from app.core.openapi import use_ios_friendly_openapi
 from app.modules.auth.router import router as auth_router
 
 settings = get_settings()
@@ -68,6 +69,11 @@ app = FastAPI(
     openapi_tags=TAGS_METADATA,
     lifespan=lifespan,
 )
+
+# Post-procesa el openapi.json para que los campos opcionales (`T | None`) se
+# describan de forma que swift-openapi-generator los traduzca a propiedades Swift
+# opcionales. Sin esto, descartaria esos campos. Ver app/core/openapi.py.
+use_ios_friendly_openapi(app)
 
 
 @app.get("/health", tags=["health"])

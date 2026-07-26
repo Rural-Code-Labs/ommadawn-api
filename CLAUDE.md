@@ -95,6 +95,16 @@ con **fronteras limpias entre módulos**, no separando en procesos:
 Todos los endpoints cuelgan de `/api/v1/...`. La app móvil dependerá de este contrato, así que
 un cambio incompatible implica una nueva versión (`/api/v2`), no romper la existente.
 
+### Contrato OpenAPI apto para el cliente iOS
+
+La app iOS genera su cliente HTTP con **swift-openapi-generator** a partir del `openapi.json`.
+Ese generador **no soporta el tipo nulo** de JSON Schema (`{"type": "null"}`) que Pydantic v2
+emite para los campos `T | None`, y **descarta el campo**. Por eso `app/core/openapi.py`
+post-procesa el esquema: convierte "anulable" en "opcional" (quita la rama `null` y saca el
+campo de `required`), de modo que salga como propiedad Swift opcional (`String?`). Es global:
+**cualquier campo opcional futuro queda cubierto sin hacer nada**. No cambia las respuestas en
+runtime, solo cómo se describe el contrato.
+
 ---
 
 ## Estructura del proyecto
@@ -110,7 +120,8 @@ ommadawn-api/
 │   │   ├── config.py           # Settings vía pydantic-settings (.env)
 │   │   ├── database.py         # Engine async, sesión, Base ORM, dependencia get_session
 │   │   ├── security.py         # argon2 (hashing) + PyJWT + refresh tokens
-│   │   └── exceptions.py       # HTTPExceptions reutilizables
+│   │   ├── exceptions.py       # HTTPExceptions reutilizables
+│   │   └── openapi.py          # Post-proceso del openapi.json (opcionales aptos para iOS)
 │   └── modules/
 │       ├── auth/               # ✅ Fases 2-4 (bloque cerrado)
 │       │   ├── models.py       # User, RefreshToken

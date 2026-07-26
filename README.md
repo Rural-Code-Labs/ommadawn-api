@@ -70,7 +70,8 @@ ommadawn-api/
 │   │   ├── config.py           # Settings vía pydantic-settings (.env)
 │   │   ├── database.py         # Engine async, sesión, Base ORM, get_session
 │   │   ├── security.py         # argon2 (hashing) + JWT + refresh tokens
-│   │   └── exceptions.py       # HTTPExceptions reutilizables
+│   │   ├── exceptions.py       # HTTPExceptions reutilizables
+│   │   └── openapi.py          # Post-proceso del openapi.json (opcionales aptos para iOS)
 │   └── modules/
 │       └── auth/
 │           ├── models.py       # User, RefreshToken
