@@ -73,18 +73,24 @@ ommadawn-api/
 │   │   ├── exceptions.py       # HTTPExceptions reutilizables
 │   │   └── openapi.py          # Post-proceso del openapi.json (opcionales aptos para iOS)
 │   └── modules/
-│       └── auth/
-│           ├── models.py       # User, RefreshToken
-│           ├── schemas.py      # Contratos Pydantic (request/response)
-│           ├── service.py      # Lógica: registro, login, tokens, rotación
-│           ├── dependencies.py # get_current_user (protege endpoints)
-│           └── router.py       # Endpoints /api/v1/auth/*
+│       ├── auth/
+│       │   ├── models.py       # User, RefreshToken
+│       │   ├── schemas.py      # Contratos Pydantic (request/response)
+│       │   ├── service.py      # Lógica: registro, login, tokens, rotación
+│       │   ├── dependencies.py # get_current_user, require_admin (protegen endpoints)
+│       │   └── router.py       # Endpoints /api/v1/auth/*
+│       └── discography/
+│           ├── models.py       # Release (tipo studio/compilation/single/bootleg), Track
+│           ├── schemas.py      # ReleaseCreate/Read, TrackCreate/Read
+│           ├── service.py      # Listar, ver detalle, crear (con tracklist anidada)
+│           └── router.py       # Endpoints /api/v1/discography/*
 ├── migrations/                 # Alembic: env.py (async) + versions/
 │   ├── env.py                  # Lee la URL de Settings, expone Base.metadata
 │   └── versions/               # Una migración por cambio de esquema
 ├── tests/
 │   ├── conftest.py             # Fixtures (cliente HTTP + BD en memoria)
-│   └── test_auth.py            # Tests de integración de auth
+│   ├── test_auth.py            # Tests de integración de auth
+│   └── test_discography.py     # Tests de integración de discografía
 ├── docker-compose.yml          # PostgreSQL local para desarrollo
 ├── alembic.ini                 # Config de Alembic
 ├── .env.example
@@ -210,6 +216,27 @@ sequenceDiagram
 
 ---
 
+## Discografía
+
+Discos, recopilatorios, singles y bootlegs se catalogan bajo un único concepto,
+**`Release`** (publicación), distinguidos por `release_type`. Cada `Release` trae
+su lista de `Track` (temas), creada de forma anidada en el mismo `POST`.
+
+Leer el catálogo es **público**; crear publicaciones exige ser **administrador**.
+
+### Endpoints
+
+| Método | Ruta | Protegido | Descripción |
+|---|---|---|---|
+| `GET` | `/api/v1/discography/releases` | — | Lista publicaciones (filtro opcional `?type=studio\|compilation\|single\|bootleg`) |
+| `GET` | `/api/v1/discography/releases/{id}` | — | Detalle de una publicación, con sus temas |
+| `POST` | `/api/v1/discography/releases` | 🔒👑 | Crea una publicación (con su tracklist) |
+
+🔒👑 = requiere `Authorization: Bearer <access token>` de un usuario **administrador**
+(`is_admin=True`; se marca directamente en BD, no hay endpoint público para ello).
+
+---
+
 ## Plan por fases
 
 El proyecto se construye por fases pequeñas; cada una se cierra (y se entiende)
@@ -221,6 +248,6 @@ antes de empezar la siguiente.
 | **2 — Modelo de usuario** | Model ORM `User`: login por username o email (únicos), `full_name` y `hashed_password` opcionales (preparado para OAuth), `is_active`, `is_admin`, timestamps. | ✅ Hecha |
 | **3 — Flujo de tokens** | Hashing argon2, JWT access token y refresh token con rotación. | ✅ Hecha |
 | **4 — Endpoints de auth** | `register`, `login`, `refresh`, `logout`, `me` + tests de integración. Cierra el bloque de auth. | ✅ Hecha |
-| **5 — Discografía** | Álbumes de estudio, recopilatorios, singles, bootlegs, directos… y sus temas/pistas. | ⏭️ Siguiente |
+| **5 — Discografía** | Álbumes de estudio, recopilatorios, singles, bootlegs, directos… y sus temas/pistas. | 🚧 En marcha (discos ya funcionando) |
 | **6 — Conciertos** | Giras, fechas, salas, setlists. | Pendiente |
 | **7 — Libros** | Bibliografía relacionada. | Pendiente |

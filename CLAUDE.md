@@ -34,8 +34,10 @@ mantenerse estable y bien versionado.
 - **Nombre**: proyecto / carpeta / repo van con **guion** (`ommadawn-api`); el **paquete
   Python importable es `app`** (Python no admite guion en un `import`). No existe
   `ommadawn_api` en el código, solo aparecía en prosa.
-- **Progreso**: **Fases 1–4 (bloque de auth) cerradas** ✅. Siguiente: **Fase 5 —
-  Discografía** (ver tabla de fases más abajo). El módulo `discography/` aún no existe.
+- **Progreso**: **Fases 1–4 (bloque de auth) cerradas** ✅. **Fase 5 (Discografía) en
+  marcha**: modelo `Release`/`Track` + endpoints de discos ya funcionando (ver tabla de
+  fases y sección "Discografía" más abajo). Quedan recopilatorios/singles/bootlegs por
+  poblar con datos reales y, más adelante, "directos" como tipo nuevo.
 - **Base de datos en desarrollo = PostgreSQL local en Docker** (`docker compose up -d`),
   el mismo motor que en producción. SQLite queda como alternativa rápida (línea comentada
   en `.env` / `.env.example`).
@@ -127,9 +129,13 @@ ommadawn-api/
 │       │   ├── models.py       # User, RefreshToken
 │       │   ├── schemas.py      # Contratos Pydantic (request/response)
 │       │   ├── service.py      # Lógica: registro, login, tokens, rotación
-│       │   ├── dependencies.py # get_current_user (protege endpoints)
+│       │   ├── dependencies.py # get_current_user, require_admin (protegen endpoints)
 │       │   └── router.py       # /api/v1/auth/*
-│       ├── discography/        # ⏭️ Fase 5 (aún no creado)
+│       ├── discography/        # ⏭️ Fase 5 en marcha (Release + Track: discos)
+│       │   ├── models.py       # Release (ReleaseType: studio/compilation/single/bootleg), Track
+│       │   ├── schemas.py      # ReleaseCreate/Read, TrackCreate/Read
+│       │   ├── service.py      # Listar, ver detalle, crear (con tracklist anidada)
+│       │   └── router.py       # /api/v1/discography/* (leer: público; crear: admin)
 │       └── concerts/           # Fase 6 (futuro)
 ├── migrations/                 # Alembic: env.py (async) + versions/
 ├── tests/                      # Tests de integración por módulo (conftest.py, test_auth.py)
@@ -179,6 +185,41 @@ no crea tablas al arrancar. Tras tocar un modelo: `alembic revision --autogenera
 
 ---
 
+## Discografía (Fase 5)
+
+Discos, recopilatorios, singles y bootlegs se modelan bajo un único concepto: **`Release`**
+(publicación), con un campo `release_type` que los distingue. No `Album`, porque un single o
+un bootleg no son "un álbum" en sentido estricto.
+
+Decisiones de diseño fijadas (para no repensarlas en cada fase futura):
+
+- **Una tabla, no una por tipo.** `releases` con `release_type` (`studio` / `compilation` /
+  `single` / `bootleg`) en vez de tablas de detalle por tipo (herencia con JOIN). Se añadirá
+  una tabla de detalle solo si un tipo necesita de verdad un campo exclusivo — hoy no hay
+  ninguno conocido.
+- **`release_type` es texto validado por Python + `CHECK`, no un enum nativo de PostgreSQL.**
+  Se sabe que este conjunto de valores va a crecer (`directo` está pendiente); añadir un valor
+  a un `CHECK` es una migración más simple que la de un tipo nativo (`ALTER TYPE ... ADD
+  VALUE`). La columna guarda el *valor* del enum (`"studio"`), no el nombre (`"STUDIO"`), para
+  hablar el mismo idioma que el JSON de la API.
+- **Cada `Track` pertenece a una única `Release`** (1:N, sin compartir temas entre
+  publicaciones). Si el mismo tema aparece en un disco y en un recopilatorio, hoy son dos filas
+  independientes. El día que la deduplicación importe de verdad (al poblar recopilatorios),
+  se migra a una relación N:M con tabla intermedia.
+- **Leer el catálogo es público; crear exige ser administrador** (`require_admin`, en
+  `auth/dependencies.py`, reutilizable por futuros módulos de catálogo como conciertos/libros).
+  No hay endpoint para promover a admin: se hace directamente en BD (o en los tests, vía sesión
+  directa — ver `tests/conftest.py::db_session`).
+- **Los temas se crean anidados** en el body de `POST /releases` (`tracks: [...]`), no en un
+  endpoint aparte: así es como se cura el catálogo en la práctica, un disco siempre trae su
+  tracklist consigo.
+
+Endpoints actuales: `GET /api/v1/discography/releases` (lista, filtro opcional `?type=`),
+`GET /api/v1/discography/releases/{id}` (detalle con temas), `POST /api/v1/discography/releases`
+(crear, admin). Faltan `PATCH`/`DELETE` — se añadirán cuando haga falta editar/borrar catálogo.
+
+---
+
 ## Plan por fases
 
 El proyecto se construye por fases **pequeñas y entendibles**. Cada fase se cierra (y se
@@ -194,7 +235,7 @@ solo sirve de referencia de estilo) y se reparte en varias fases:
 | **Fase 2 — Modelo de usuario** | Model ORM `User` (tabla `users`): login por username o email (ambos únicos), `full_name` y `hashed_password` opcionales (preparado para OAuth futuro), `is_active`, `is_admin`, timestamps. | ✅ Hecha |
 | **Fase 3 — Flujo de tokens** | Access token + refresh token con rotación, hashing de contraseñas (argon2), seguridad JWT. | ✅ Hecha |
 | **Fase 4 — Endpoints de auth** | `register`, `login`, `refresh`, `logout`, `me` + tests de integración. Cierra el bloque de auth. | ✅ Hecha |
-| **Fase 5 — Discografía** | Discos (álbumes de estudio), recopilatorios, singles, bootlegs, directos… y sus temas/pistas. | ⏭️ Siguiente |
+| **Fase 5 — Discografía** | Discos (álbumes de estudio), recopilatorios, singles, bootlegs, directos… y sus temas/pistas. | 🚧 En marcha (modelo + endpoints de discos listos; falta poblar y añadir "directo") |
 | **Fase 6 — Conciertos** | Giras, fechas, salas, setlists. | Pendiente |
 | **Fase 7 — Libros** | Bibliografía relacionada. | Pendiente |
 | **Fases siguientes** | Otras secciones a acordar con el usuario. | Pendiente |
