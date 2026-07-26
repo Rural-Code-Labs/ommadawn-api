@@ -160,6 +160,11 @@ class Edition(Base):
         cascade="all, delete-orphan",
         order_by="Track.position",
     )
+    images: Mapped[list["Image"]] = relationship(
+        back_populates="edition",
+        cascade="all, delete-orphan",
+        order_by="Image.image_type",
+    )
 
     def __repr__(self) -> str:
         return (
@@ -202,4 +207,58 @@ class Track(Base):
         return (
             f"<Track id={self.id} edition_id={self.edition_id} "
             f"position={self.position} title={self.title!r}>"
+        )
+
+
+class ImageType(str, enum.Enum):
+    """Tipos de imagen de una edicion. Mismo patron que ReleaseType: texto
+    validado por Python + CHECK, ampliable sin tocar tipos nativos."""
+
+    FRONT_COVER = "front_cover"
+    BACK_COVER = "back_cover"
+    OTHER = "other"
+
+
+class Image(Base):
+    """Tabla `images`: una imagen (portada, contraportada...) de una edicion.
+
+    Solo guarda la URL (la devuelve el StorageBackend al subir el fichero,
+    ver app/core/storage.py); los bytes NUNCA viven en la base de datos.
+
+    `front_cover`/`back_cover` se SUSTITUYEN al subir una nueva (lo gestiona el
+    service, no hay restriccion UNIQUE aqui): como mucho una de cada por
+    edicion. `other` si se acumula: varias paginas de un librillo, fotos
+    sueltas...
+    """
+
+    __tablename__ = "images"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    edition_id: Mapped[int] = mapped_column(
+        ForeignKey("editions.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+
+    image_type: Mapped[ImageType] = mapped_column(
+        Enum(
+            ImageType,
+            native_enum=False,
+            validate_strings=True,
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        nullable=False,
+    )
+
+    url: Mapped[str] = mapped_column(String(500), nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    edition: Mapped["Edition"] = relationship(back_populates="images")
+
+    def __repr__(self) -> str:
+        return (
+            f"<Image id={self.id} edition_id={self.edition_id} "
+            f"type={self.image_type.value}>"
         )

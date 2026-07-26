@@ -11,19 +11,21 @@ Leer el catalogo (listar, ver detalle) es PUBLICO: es el proposito de la app.
 Escribir (crear/editar/borrar obras y ediciones) exige ser ADMINISTRADOR.
 """
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
 from app.core.exceptions import ErrorMessage
+from app.core.storage import StorageBackend, get_storage_backend
 from app.modules.auth.dependencies import require_admin
 from app.modules.auth.models import User
 from app.modules.discography import service
-from app.modules.discography.models import Edition, Release, ReleaseType
+from app.modules.discography.models import Edition, Image, ImageType, Release, ReleaseType
 from app.modules.discography.schemas import (
     EditionCreate,
     EditionRead,
     EditionUpdate,
+    ImageRead,
     ReleaseCreate,
     ReleaseRead,
     ReleaseUpdate,
@@ -47,6 +49,15 @@ _FORBIDDEN = {
 _INVALID_TRACKS = {
     "model": ErrorMessage,
     "description": "Datos invalidos (p. ej. dos temas con la misma posicion)",
+}
+_IMAGE_NOT_FOUND = {"model": ErrorMessage, "description": "La imagen no existe"}
+_INVALID_IMAGE = {
+    "model": ErrorMessage,
+    "description": "Formato de imagen no soportado (usa JPEG, PNG o WEBP)",
+}
+_IMAGE_TOO_LARGE = {
+    "model": ErrorMessage,
+    "description": "La imagen supera el tamano maximo permitido (10 MB)",
 }
 
 
@@ -206,3 +217,65 @@ async def delete_edition(
 ) -> None:
     """Borra una edicion y sus temas."""
     await service.delete_edition(session, release_id, edition_id)
+
+
+# --- Image (portada, contraportada... de una edicion) -----------------------------
+
+
+@router.post(
+    "/releases/{release_id}/editions/{edition_id}/images",
+    response_model=ImageRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Subir una imagen a una edicion (requiere administrador)",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: _NO_AUTH,
+        status.HTTP_403_FORBIDDEN: _FORBIDDEN,
+        status.HTTP_404_NOT_FOUND: _EDITION_NOT_FOUND,
+        status.HTTP_413_CONTENT_TOO_LARGE: _IMAGE_TOO_LARGE,
+        status.HTTP_422_UNPROCESSABLE_CONTENT: _INVALID_IMAGE,
+    },
+)
+async def upload_image(
+    release_id: int,
+    edition_id: int,
+    image_type: ImageType = Form(
+        description="Tipo de imagen: front_cover, back_cover u other"
+    ),
+    file: UploadFile = File(description="Fichero de imagen (JPEG, PNG o WEBP)"),
+    session: AsyncSession = Depends(get_session),
+    storage: StorageBackend = Depends(get_storage_backend),
+    _admin: User = Depends(require_admin),
+) -> Image:
+    """Sube una imagen. `front_cover`/`back_cover` sustituyen la anterior; `other` se acumula."""
+    content = await file.read()
+    return await service.upload_image(
+        session,
+        storage,
+        release_id,
+        edition_id,
+        image_type,
+        content,
+        file.content_type or "",
+    )
+
+
+@router.delete(
+    "/releases/{release_id}/editions/{edition_id}/images/{image_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Borrar una imagen (requiere administrador)",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: _NO_AUTH,
+        status.HTTP_403_FORBIDDEN: _FORBIDDEN,
+        status.HTTP_404_NOT_FOUND: _IMAGE_NOT_FOUND,
+    },
+)
+async def delete_image(
+    release_id: int,
+    edition_id: int,
+    image_id: int,
+    session: AsyncSession = Depends(get_session),
+    storage: StorageBackend = Depends(get_storage_backend),
+    _admin: User = Depends(require_admin),
+) -> None:
+    """Borra una imagen: la fila y el fichero subyacente."""
+    await service.delete_image(session, storage, release_id, edition_id, image_id)

@@ -26,6 +26,15 @@ class Settings(BaseSettings):
     # PostgreSQL en el .env, sin tocar codigo.
     database_url: str = "sqlite+aiosqlite:///./ommadawn.db"
 
+    # --- Almacenamiento de ficheros (portadas, contraportadas...) ---
+    # "local" en desarrollo (disco, servido por la propia API en /media); en
+    # produccion sera "gcs" (Google Cloud Storage, pendiente de implementar).
+    # Se elige por config, igual que database_url: cambiar de backend no toca
+    # codigo. Ver app/core/storage.py.
+    storage_backend: str = "local"
+    media_root: str = "./media"
+    media_base_url: str = "http://localhost:8000/media"
+
     # --- Seguridad / JWT ---
     secret_key: str  # obligatorio: sin valor por defecto
     algorithm: str = "HS256"

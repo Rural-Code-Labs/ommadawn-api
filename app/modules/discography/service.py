@@ -5,12 +5,15 @@ errores de negocio (p. ej. "no existe"). No sabe nada de HTTP mas alla de
 reutilizar `HTTPException`, igual que hace `core/exceptions.py`.
 """
 
+from uuid import uuid4
+
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.modules.discography.models import Edition, Release, ReleaseType, Track
+from app.core.storage import StorageBackend
+from app.modules.discography.models import Edition, Image, ImageType, Release, ReleaseType, Track
 from app.modules.discography.schemas import (
     EditionCreate,
     EditionUpdate,
@@ -18,8 +21,9 @@ from app.modules.discography.schemas import (
     ReleaseUpdate,
 )
 
-# 404 -> la obra o la edicion pedida no existe. Especificos de este modulo (no
-# viven en core/exceptions.py, que es para lo verdaderamente transversal).
+# 404 -> la obra, la edicion o la imagen pedida no existe. Especificos de este
+# modulo (no viven en core/exceptions.py, que es para lo verdaderamente
+# transversal).
 release_not_found_exception = HTTPException(
     status_code=status.HTTP_404_NOT_FOUND,
     detail="Publicacion no encontrada",
@@ -28,10 +32,40 @@ edition_not_found_exception = HTTPException(
     status_code=status.HTTP_404_NOT_FOUND,
     detail="Edicion no encontrada",
 )
+image_not_found_exception = HTTPException(
+    status_code=status.HTTP_404_NOT_FOUND,
+    detail="Imagen no encontrada",
+)
 
-# Carga en cadena: las ediciones de un Release, y los temas de cada edicion, en
-# consultas batch (evita una consulta N+1 por cada nivel al serializar).
-_RELEASE_WITH_EDITIONS = selectinload(Release.editions).selectinload(Edition.tracks)
+# Content-type aceptado -> extension del fichero guardado. Cerrado a proposito
+# (formatos de imagen web habituales); cualquier otro se rechaza con 422.
+_ALLOWED_IMAGE_CONTENT_TYPES = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+}
+invalid_image_type_exception = HTTPException(
+    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+    detail="Formato de imagen no soportado (usa JPEG, PNG o WEBP)",
+)
+
+# 10 MB: generoso para una portada, pequeno para un ataque de subida masiva.
+MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024
+image_too_large_exception = HTTPException(
+    status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+    detail="La imagen supera el tamano maximo permitido (10 MB)",
+)
+
+# Carga en cadena: las ediciones de un Release, y los temas/imagenes de cada
+# edicion, en consultas batch (evita una consulta N+1 por nivel al serializar).
+_RELEASE_WITH_EDITIONS = (
+    selectinload(Release.editions).selectinload(Edition.tracks),
+    selectinload(Release.editions).selectinload(Edition.images),
+)
+_EDITION_WITH_CHILDREN = (
+    selectinload(Edition.tracks),
+    selectinload(Edition.images),
+)
 
 
 # --- Release (la obra) -----------------------------------------------------------
@@ -41,7 +75,7 @@ async def list_releases(
     session: AsyncSession, release_type: ReleaseType | None = None
 ) -> list[Release]:
     """Lista obras del catalogo, opcionalmente filtradas por tipo."""
-    query = select(Release).options(_RELEASE_WITH_EDITIONS)
+    query = select(Release).options(*_RELEASE_WITH_EDITIONS)
     if release_type is not None:
         query = query.where(Release.release_type == release_type)
     query = query.order_by(Release.title)
@@ -51,10 +85,10 @@ async def list_releases(
 
 
 async def get_release(session: AsyncSession, release_id: int) -> Release:
-    """Busca una obra por id (con sus ediciones y temas). Lanza 404 si no existe."""
+    """Busca una obra por id (con sus ediciones, temas e imagenes). Lanza 404 si no existe."""
     result = await session.execute(
         select(Release)
-        .options(_RELEASE_WITH_EDITIONS)
+        .options(*_RELEASE_WITH_EDITIONS)
         .where(Release.id == release_id)
     )
     release = result.scalar_one_or_none()
@@ -105,7 +139,7 @@ async def _get_edition(session: AsyncSession, release_id: int, edition_id: int) 
     """
     result = await session.execute(
         select(Edition)
-        .options(selectinload(Edition.tracks))
+        .options(*_EDITION_WITH_CHILDREN)
         .where(Edition.id == edition_id, Edition.release_id == release_id)
     )
     edition = result.scalar_one_or_none()
@@ -161,7 +195,7 @@ async def create_edition(
     )
     session.add(edition)
     await session.commit()
-    await session.refresh(edition, attribute_names=["tracks"])
+    await session.refresh(edition, attribute_names=["tracks", "images"])
     return edition
 
 
@@ -191,7 +225,7 @@ async def update_edition(
         setattr(edition, field, value)
 
     await session.commit()
-    await session.refresh(edition, attribute_names=["tracks"])
+    await session.refresh(edition, attribute_names=["tracks", "images"])
     return edition
 
 
@@ -199,4 +233,65 @@ async def delete_edition(session: AsyncSession, release_id: int, edition_id: int
     """Borra una edicion y sus temas (CASCADE)."""
     edition = await _get_edition(session, release_id, edition_id)
     await session.delete(edition)
+    await session.commit()
+
+
+# --- Image (portada, contraportada... de una edicion) ----------------------------
+
+
+async def upload_image(
+    session: AsyncSession,
+    storage: StorageBackend,
+    release_id: int,
+    edition_id: int,
+    image_type: ImageType,
+    content: bytes,
+    content_type: str,
+) -> Image:
+    """Sube una imagen y la asocia a una edicion.
+
+    `front_cover`/`back_cover` SUSTITUYEN la anterior de su mismo tipo (se borra
+    la fila y el fichero viejo): asi el admin no acumula portadas sueltas, basta
+    con volver a subir para "reemplazar". `other` se acumula sin limite.
+    """
+    edition = await _get_edition(session, release_id, edition_id)
+
+    if content_type not in _ALLOWED_IMAGE_CONTENT_TYPES:
+        raise invalid_image_type_exception
+    if len(content) > MAX_IMAGE_SIZE_BYTES:
+        raise image_too_large_exception
+
+    if image_type != ImageType.OTHER:
+        previous = [img for img in edition.images if img.image_type == image_type]
+        for old_image in previous:
+            await storage.delete(old_image.url)
+            await session.delete(old_image)
+        if previous:
+            await session.flush()
+
+    extension = _ALLOWED_IMAGE_CONTENT_TYPES[content_type]
+    url = await storage.save(filename=f"{uuid4().hex}{extension}", content=content)
+
+    image = Image(edition_id=edition_id, image_type=image_type, url=url)
+    session.add(image)
+    await session.commit()
+    await session.refresh(image)
+    return image
+
+
+async def delete_image(
+    session: AsyncSession,
+    storage: StorageBackend,
+    release_id: int,
+    edition_id: int,
+    image_id: int,
+) -> None:
+    """Borra una imagen: la fila y el fichero subyacente."""
+    edition = await _get_edition(session, release_id, edition_id)
+    image = next((img for img in edition.images if img.id == image_id), None)
+    if image is None:
+        raise image_not_found_exception
+
+    await storage.delete(image.url)
+    await session.delete(image)
     await session.commit()

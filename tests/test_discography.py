@@ -72,6 +72,20 @@ async def _create_release(client: AsyncClient, headers: dict) -> int:
     return resp.json()["id"]
 
 
+async def _create_release_and_edition(client: AsyncClient, headers: dict) -> tuple[int, int]:
+    """Helper: crea la obra y una edicion de ejemplo. Devuelve (release_id, edition_id)."""
+    release_id = await _create_release(client, headers)
+    edition = await client.post(
+        f"{BASE}/releases/{release_id}/editions", json=UK_1973_EDITION, headers=headers
+    )
+    return release_id, edition.json()["id"]
+
+
+# Un JPEG minimo valido (cabecera SOI + EOI): basta para pasar la validacion de
+# content-type, no hace falta una imagen real para probar el flujo de subida.
+FAKE_JPEG_BYTES = b"\xff\xd8\xff\xe0" + b"\x00" * 16 + b"\xff\xd9"
+
+
 # --- Release: lectura (publica) --------------------------------------------------
 
 
@@ -403,3 +417,199 @@ async def test_admin_can_delete_edition(client: AsyncClient, db_session: AsyncSe
 
     release = (await client.get(f"{BASE}/releases/{release_id}")).json()
     assert release["editions"] == []
+
+
+# --- Image: subida ------------------------------------------------------------------
+
+
+async def test_upload_image_requires_admin(client: AsyncClient, db_session: AsyncSession):
+    headers = await _admin_headers(client, db_session)
+    release_id, edition_id = await _create_release_and_edition(client, headers)
+
+    resp = await client.post(
+        f"{BASE}/releases/{release_id}/editions/{edition_id}/images",
+        data={"image_type": "front_cover"},
+        files={"file": ("cover.jpg", FAKE_JPEG_BYTES, "image/jpeg")},
+    )
+    assert resp.status_code == 401
+
+
+async def test_admin_can_upload_front_cover(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    release_id, edition_id = await _create_release_and_edition(client, headers)
+
+    resp = await client.post(
+        f"{BASE}/releases/{release_id}/editions/{edition_id}/images",
+        data={"image_type": "front_cover"},
+        files={"file": ("cover.jpg", FAKE_JPEG_BYTES, "image/jpeg")},
+        headers=headers,
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["image_type"] == "front_cover"
+    assert body["url"].startswith("http://testserver/media/")
+
+    # Y aparece anidada al leer la obra completa.
+    release = (await client.get(f"{BASE}/releases/{release_id}")).json()
+    images = release["editions"][0]["images"]
+    assert len(images) == 1
+    assert images[0]["image_type"] == "front_cover"
+
+
+async def test_uploading_a_new_front_cover_replaces_the_previous_one(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    release_id, edition_id = await _create_release_and_edition(client, headers)
+    upload_url = f"{BASE}/releases/{release_id}/editions/{edition_id}/images"
+
+    first = await client.post(
+        upload_url,
+        data={"image_type": "front_cover"},
+        files={"file": ("v1.jpg", FAKE_JPEG_BYTES, "image/jpeg")},
+        headers=headers,
+    )
+    second = await client.post(
+        upload_url,
+        data={"image_type": "front_cover"},
+        files={"file": ("v2.jpg", FAKE_JPEG_BYTES, "image/jpeg")},
+        headers=headers,
+    )
+    assert second.status_code == 201
+    assert second.json()["url"] != first.json()["url"]
+
+    release = (await client.get(f"{BASE}/releases/{release_id}")).json()
+    images = release["editions"][0]["images"]
+    # Solo queda UNA front_cover: la segunda sustituyo a la primera.
+    assert len(images) == 1
+    assert images[0]["url"] == second.json()["url"]
+
+
+async def test_uploading_other_images_accumulates(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    release_id, edition_id = await _create_release_and_edition(client, headers)
+    upload_url = f"{BASE}/releases/{release_id}/editions/{edition_id}/images"
+
+    await client.post(
+        upload_url,
+        data={"image_type": "other"},
+        files={"file": ("booklet-1.jpg", FAKE_JPEG_BYTES, "image/jpeg")},
+        headers=headers,
+    )
+    await client.post(
+        upload_url,
+        data={"image_type": "other"},
+        files={"file": ("booklet-2.jpg", FAKE_JPEG_BYTES, "image/jpeg")},
+        headers=headers,
+    )
+
+    release = (await client.get(f"{BASE}/releases/{release_id}")).json()
+    images = release["editions"][0]["images"]
+    assert len(images) == 2
+
+
+async def test_upload_rejects_unsupported_content_type(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    release_id, edition_id = await _create_release_and_edition(client, headers)
+
+    resp = await client.post(
+        f"{BASE}/releases/{release_id}/editions/{edition_id}/images",
+        data={"image_type": "front_cover"},
+        files={"file": ("cover.pdf", b"%PDF-1.4 ...", "application/pdf")},
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
+async def test_upload_rejects_oversized_image(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch
+):
+    from app.modules.discography import service
+
+    # Bajamos el limite a 10 bytes para no tener que generar un fichero enorme.
+    monkeypatch.setattr(service, "MAX_IMAGE_SIZE_BYTES", 10)
+
+    headers = await _admin_headers(client, db_session)
+    release_id, edition_id = await _create_release_and_edition(client, headers)
+
+    resp = await client.post(
+        f"{BASE}/releases/{release_id}/editions/{edition_id}/images",
+        data={"image_type": "front_cover"},
+        files={"file": ("cover.jpg", FAKE_JPEG_BYTES, "image/jpeg")},
+        headers=headers,
+    )
+    assert resp.status_code == 413
+
+
+async def test_upload_image_on_unknown_edition_returns_404(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    release_id = await _create_release(client, headers)
+
+    resp = await client.post(
+        f"{BASE}/releases/{release_id}/editions/999/images",
+        data={"image_type": "front_cover"},
+        files={"file": ("cover.jpg", FAKE_JPEG_BYTES, "image/jpeg")},
+        headers=headers,
+    )
+    assert resp.status_code == 404
+
+
+# --- Image: borrado ------------------------------------------------------------------
+
+
+async def test_delete_image_requires_admin(client: AsyncClient, db_session: AsyncSession):
+    headers = await _admin_headers(client, db_session)
+    release_id, edition_id = await _create_release_and_edition(client, headers)
+    uploaded = await client.post(
+        f"{BASE}/releases/{release_id}/editions/{edition_id}/images",
+        data={"image_type": "front_cover"},
+        files={"file": ("cover.jpg", FAKE_JPEG_BYTES, "image/jpeg")},
+        headers=headers,
+    )
+    image_id = uploaded.json()["id"]
+
+    resp = await client.delete(
+        f"{BASE}/releases/{release_id}/editions/{edition_id}/images/{image_id}"
+    )
+    assert resp.status_code == 401
+
+
+async def test_delete_unknown_image_returns_404(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    release_id, edition_id = await _create_release_and_edition(client, headers)
+
+    resp = await client.delete(
+        f"{BASE}/releases/{release_id}/editions/{edition_id}/images/999", headers=headers
+    )
+    assert resp.status_code == 404
+
+
+async def test_admin_can_delete_image(client: AsyncClient, db_session: AsyncSession):
+    headers = await _admin_headers(client, db_session)
+    release_id, edition_id = await _create_release_and_edition(client, headers)
+    uploaded = await client.post(
+        f"{BASE}/releases/{release_id}/editions/{edition_id}/images",
+        data={"image_type": "front_cover"},
+        files={"file": ("cover.jpg", FAKE_JPEG_BYTES, "image/jpeg")},
+        headers=headers,
+    )
+    image_id = uploaded.json()["id"]
+
+    resp = await client.delete(
+        f"{BASE}/releases/{release_id}/editions/{edition_id}/images/{image_id}",
+        headers=headers,
+    )
+    assert resp.status_code == 204
+
+    release = (await client.get(f"{BASE}/releases/{release_id}")).json()
+    assert release["editions"][0]["images"] == []

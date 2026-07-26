@@ -9,7 +9,7 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.modules.discography.models import ReleaseType
+from app.modules.discography.models import ImageType, ReleaseType
 
 # --- Entrada (request) ---------------------------------------------------------
 
@@ -110,8 +110,23 @@ class TrackRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ImageRead(BaseModel):
+    """Vista publica de una imagen (portada, contraportada...) de una edicion.
+
+    No hay `ImageCreate`: la subida es un endpoint de fichero (multipart), no
+    un body JSON; sus campos (`image_type`, el propio fichero) se declaran
+    directamente en la firma del endpoint (ver router.py).
+    """
+
+    id: int
+    image_type: ImageType
+    url: str
+
+    model_config = {"from_attributes": True}
+
+
 class EditionRead(BaseModel):
-    """Vista publica de una edicion, con su tracklist incluida."""
+    """Vista publica de una edicion, con su tracklist e imagenes incluidas."""
 
     id: int
     country: str | None
@@ -120,6 +135,7 @@ class EditionRead(BaseModel):
     release_date: date | None
     is_primary: bool
     tracks: list[TrackRead]
+    images: list[ImageRead]
 
     model_config = {"from_attributes": True}
 

@@ -9,8 +9,10 @@ La logica de negocio NO vive aqui: vive en cada modulo (app/modules/*).
 """
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from app.core.config import get_settings
 from app.core.openapi import use_ios_friendly_openapi
@@ -96,3 +98,12 @@ async def health() -> dict[str, str]:
 # /api/v1/discography/...
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(discography_router, prefix="/api/v1")
+
+# --- Ficheros subidos (imagenes) ---
+# Fuera de /api/v1 a proposito: no es un recurso JSON versionado, es servir
+# bytes estaticos (como lo serviria un bucket/CDN en produccion). Solo se monta
+# si el backend activo es el local (con GCS, las imagenes se sirven desde el
+# bucket, no desde aqui). Ver app/core/storage.py.
+if settings.storage_backend == "local":
+    Path(settings.media_root).mkdir(parents=True, exist_ok=True)
+    app.mount("/media", StaticFiles(directory=settings.media_root), name="media")
