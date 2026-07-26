@@ -169,3 +169,128 @@ async def test_list_releases_filters_by_type(
     body = resp.json()
     assert len(body) == 1
     assert body[0]["title"] == "Boxed"
+
+
+# --- Edicion (PATCH) ---------------------------------------------------------------
+
+
+async def test_update_release_requires_admin(client: AsyncClient, db_session: AsyncSession):
+    headers = await _admin_headers(client, db_session)
+    created = await client.post(f"{BASE}/releases", json=TUBULAR_BELLS, headers=headers)
+    release_id = created.json()["id"]
+
+    resp = await client.patch(f"{BASE}/releases/{release_id}", json={"title": "Nuevo"})
+    assert resp.status_code == 401
+
+
+async def test_update_unknown_release_returns_404(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    resp = await client.patch(
+        f"{BASE}/releases/999", json={"title": "Nuevo"}, headers=headers
+    )
+    assert resp.status_code == 404
+
+
+async def test_update_only_touches_sent_fields(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    created = await client.post(f"{BASE}/releases", json=TUBULAR_BELLS, headers=headers)
+    release_id = created.json()["id"]
+
+    resp = await client.patch(
+        f"{BASE}/releases/{release_id}",
+        json={"title": "Tubular Bells (remaster)"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["title"] == "Tubular Bells (remaster)"
+    # Campos NO enviados no se tocan: el tipo y los temas siguen igual.
+    assert body["release_type"] == "studio"
+    assert len(body["tracks"]) == 2
+
+
+async def test_update_can_clear_a_nullable_field(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    created = await client.post(f"{BASE}/releases", json=TUBULAR_BELLS, headers=headers)
+    release_id = created.json()["id"]
+
+    # Enviar release_date=null borra la fecha (distinto de omitirla).
+    resp = await client.patch(
+        f"{BASE}/releases/{release_id}",
+        json={"release_date": None},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["release_date"] is None
+
+
+async def test_update_with_tracks_replaces_the_whole_tracklist(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    created = await client.post(f"{BASE}/releases", json=TUBULAR_BELLS, headers=headers)
+    release_id = created.json()["id"]
+
+    resp = await client.patch(
+        f"{BASE}/releases/{release_id}",
+        json={"tracks": [{"position": 1, "title": "Version unica"}]},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    tracks = resp.json()["tracks"]
+    assert len(tracks) == 1
+    assert tracks[0]["title"] == "Version unica"
+
+
+async def test_update_rejects_duplicate_track_positions(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    created = await client.post(f"{BASE}/releases", json=TUBULAR_BELLS, headers=headers)
+    release_id = created.json()["id"]
+
+    resp = await client.patch(
+        f"{BASE}/releases/{release_id}",
+        json={"tracks": [{"position": 1, "title": "A"}, {"position": 1, "title": "B"}]},
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
+# --- Borrado (DELETE) --------------------------------------------------------------
+
+
+async def test_delete_release_requires_admin(client: AsyncClient, db_session: AsyncSession):
+    headers = await _admin_headers(client, db_session)
+    created = await client.post(f"{BASE}/releases", json=TUBULAR_BELLS, headers=headers)
+    release_id = created.json()["id"]
+
+    resp = await client.delete(f"{BASE}/releases/{release_id}")
+    assert resp.status_code == 401
+
+
+async def test_delete_unknown_release_returns_404(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    resp = await client.delete(f"{BASE}/releases/999", headers=headers)
+    assert resp.status_code == 404
+
+
+async def test_admin_can_delete_release(client: AsyncClient, db_session: AsyncSession):
+    headers = await _admin_headers(client, db_session)
+    created = await client.post(f"{BASE}/releases", json=TUBULAR_BELLS, headers=headers)
+    release_id = created.json()["id"]
+
+    resp = await client.delete(f"{BASE}/releases/{release_id}", headers=headers)
+    assert resp.status_code == 204
+
+    # Tras borrar, ya no existe.
+    after = await client.get(f"{BASE}/releases/{release_id}")
+    assert after.status_code == 404

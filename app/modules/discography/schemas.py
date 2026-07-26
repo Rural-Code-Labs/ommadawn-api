@@ -48,6 +48,33 @@ class ReleaseCreate(BaseModel):
         return self
 
 
+class ReleaseUpdate(BaseModel):
+    """Datos para editar una publicacion (body de PATCH /releases/{id}).
+
+    Es un PATCH de verdad: solo se aplican los campos PRESENTES en el body (el
+    service lo resuelve con `model_dump(exclude_unset=True)`). Un campo omitido
+    no se toca; uno enviado si se aplica, aunque sea `null` (p. ej. borrar una
+    `release_date` que resulto ser incierta).
+
+    `tracks`, si se incluye, REEMPLAZA toda la tracklist existente (aunque sea
+    una lista vacia). Si se omite, los temas actuales no se tocan.
+    """
+
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    release_type: ReleaseType | None = None
+    release_date: date | None = None
+    tracks: list[TrackCreate] | None = None
+
+    @model_validator(mode="after")
+    def _positions_are_unique(self) -> "ReleaseUpdate":
+        """Misma regla que en ReleaseCreate, solo si se ha enviado `tracks`."""
+        if self.tracks:
+            positions = [t.position for t in self.tracks]
+            if len(positions) != len(set(positions)):
+                raise ValueError("Hay temas con el mismo numero de posicion")
+        return self
+
+
 # --- Salida (response) ---------------------------------------------------------
 
 

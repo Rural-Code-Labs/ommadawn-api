@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.modules.discography.models import Release, ReleaseType, Track
-from app.modules.discography.schemas import ReleaseCreate
+from app.modules.discography.schemas import ReleaseCreate, ReleaseUpdate
 
 # 404 -> la publicacion pedida no existe. Es especifico de este modulo (no vive
 # en core/exceptions.py, que es para lo verdaderamente transversal).
@@ -79,3 +79,42 @@ async def create_release(session: AsyncSession, data: ReleaseCreate) -> Release:
     await session.commit()
     await session.refresh(release, attribute_names=["tracks"])
     return release
+
+
+async def update_release(
+    session: AsyncSession, release_id: int, data: ReleaseUpdate
+) -> Release:
+    """Edita una publicacion. Solo toca los campos presentes en el body.
+
+    `model_dump(exclude_unset=True)` es la clave: distingue un campo OMITIDO (no
+    se toca) de uno enviado como `null` (se aplica de verdad, p. ej. borrar una
+    `release_date` incierta). Si el body incluye `tracks`, se reemplaza la
+    coleccion entera; gracias a `cascade="all, delete-orphan"` en el modelo,
+    reasignarla borra los temas viejos y crea los nuevos en el mismo commit.
+    """
+    release = await get_release(session, release_id)
+    updates = data.model_dump(exclude_unset=True)
+
+    if "tracks" in updates:
+        tracks_data = updates.pop("tracks")
+        # Vaciar y hacer FLUSH antes de anadir los nuevos: si no, SQLAlchemy
+        # puede emitir los INSERT antes que los DELETE de los temas viejos y
+        # chocar con el UNIQUE(release_id, position) cuando se repite un numero
+        # de pista entre la tracklist vieja y la nueva.
+        release.tracks = []
+        await session.flush()
+        release.tracks = [Track(**track) for track in tracks_data]
+
+    for field, value in updates.items():
+        setattr(release, field, value)
+
+    await session.commit()
+    await session.refresh(release, attribute_names=["tracks"])
+    return release
+
+
+async def delete_release(session: AsyncSession, release_id: int) -> None:
+    """Borra una publicacion y sus temas (CASCADE, tanto en el ORM como en la FK)."""
+    release = await get_release(session, release_id)
+    await session.delete(release)
+    await session.commit()

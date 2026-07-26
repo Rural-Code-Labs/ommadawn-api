@@ -17,7 +17,7 @@ from app.modules.auth.dependencies import require_admin
 from app.modules.auth.models import User
 from app.modules.discography import service
 from app.modules.discography.models import Release, ReleaseType
-from app.modules.discography.schemas import ReleaseCreate, ReleaseRead
+from app.modules.discography.schemas import ReleaseCreate, ReleaseRead, ReleaseUpdate
 
 router = APIRouter(prefix="/discography", tags=["discography"])
 
@@ -90,3 +90,46 @@ async def create_release(
     `_admin`: solo se usa para exigir el permiso; no se necesita su valor.
     """
     return await service.create_release(session, data)
+
+
+@router.patch(
+    "/releases/{release_id}",
+    response_model=ReleaseRead,
+    summary="Editar una publicacion (requiere administrador)",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: _NO_AUTH,
+        status.HTTP_403_FORBIDDEN: _FORBIDDEN,
+        status.HTTP_404_NOT_FOUND: _NOT_FOUND,
+        status.HTTP_422_UNPROCESSABLE_CONTENT: _INVALID_TRACKS,
+    },
+)
+async def update_release(
+    release_id: int,
+    data: ReleaseUpdate,
+    session: AsyncSession = Depends(get_session),
+    _admin: User = Depends(require_admin),
+) -> Release:
+    """Edita los campos presentes en el body.
+
+    Si el body incluye `tracks`, reemplaza toda la tracklist existente.
+    """
+    return await service.update_release(session, release_id, data)
+
+
+@router.delete(
+    "/releases/{release_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Borrar una publicacion (requiere administrador)",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: _NO_AUTH,
+        status.HTTP_403_FORBIDDEN: _FORBIDDEN,
+        status.HTTP_404_NOT_FOUND: _NOT_FOUND,
+    },
+)
+async def delete_release(
+    release_id: int,
+    session: AsyncSession = Depends(get_session),
+    _admin: User = Depends(require_admin),
+) -> None:
+    """Borra una publicacion y sus temas."""
+    await service.delete_release(session, release_id)
