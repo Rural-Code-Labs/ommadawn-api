@@ -215,8 +215,17 @@ Decisiones de diseño fijadas (para no repensarlas en cada fase futura):
   tracklist consigo.
 
 Endpoints actuales: `GET /api/v1/discography/releases` (lista, filtro opcional `?type=`),
-`GET /api/v1/discography/releases/{id}` (detalle con temas), `POST /api/v1/discography/releases`
-(crear, admin). Faltan `PATCH`/`DELETE` — se añadirán cuando haga falta editar/borrar catálogo.
+`GET /api/v1/discography/releases/{id}` (detalle con temas), `POST` (crear, admin), `PATCH`
+(editar, admin) y `DELETE` (borrar, admin) sobre `/releases/{id}`.
+
+**`PATCH` es un PATCH de verdad**: usa `model_dump(exclude_unset=True)` para distinguir un
+campo *omitido* (no se toca) de uno *enviado como `null`* (se aplica, p. ej. borrar una
+`release_date` que resultó incierta). Si el body incluye `tracks`, reemplaza la tracklist
+entera (se apoya en `cascade="all, delete-orphan"` del modelo) — no hay endpoints sueltos por
+tema, editar un disco es reenviar su lista completa corregida. Detalle de implementación a
+recordar: al reemplazar la colección hay que vaciarla y hacer `flush()` **antes** de añadir los
+temas nuevos, o SQLAlchemy puede emitir los `INSERT` antes que los `DELETE` de los viejos y
+chocar con el `UNIQUE(release_id, position)` cuando se repite un número de pista.
 
 ---
 

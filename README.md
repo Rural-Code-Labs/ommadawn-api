@@ -231,6 +231,8 @@ Leer el catálogo es **público**; crear publicaciones exige ser **administrador
 | `GET` | `/api/v1/discography/releases` | — | Lista publicaciones (filtro opcional `?type=studio\|compilation\|single\|bootleg`) |
 | `GET` | `/api/v1/discography/releases/{id}` | — | Detalle de una publicación, con sus temas |
 | `POST` | `/api/v1/discography/releases` | 🔒👑 | Crea una publicación (con su tracklist) |
+| `PATCH` | `/api/v1/discography/releases/{id}` | 🔒👑 | Edita solo los campos enviados; si incluye `tracks`, reemplaza toda la tracklist |
+| `DELETE` | `/api/v1/discography/releases/{id}` | 🔒👑 | Borra una publicación y sus temas |
 
 🔒👑 = requiere `Authorization: Bearer <access token>` de un usuario **administrador**
 (`is_admin=True`; se marca directamente en BD, no hay endpoint público para ello).
