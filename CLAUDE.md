@@ -131,11 +131,11 @@ ommadawn-api/
 │       │   ├── service.py      # Lógica: registro, login, tokens, rotación
 │       │   ├── dependencies.py # get_current_user, require_admin (protegen endpoints)
 │       │   └── router.py       # /api/v1/auth/*
-│       ├── discography/        # ⏭️ Fase 5 en marcha (Release + Track: discos)
-│       │   ├── models.py       # Release (ReleaseType: studio/compilation/single/bootleg), Track
-│       │   ├── schemas.py      # ReleaseCreate/Read, TrackCreate/Read
-│       │   ├── service.py      # Listar, ver detalle, crear (con tracklist anidada)
-│       │   └── router.py       # /api/v1/discography/* (leer: público; crear: admin)
+│       ├── discography/        # 🚧 Fase 5 en marcha (Release -> Edition -> Track)
+│       │   ├── models.py       # Release, Edition (is_primary), Track
+│       │   ├── schemas.py      # Release/Edition/Track Create/Read/Update
+│       │   ├── service.py      # CRUD anidado + _demote_other_primary_editions
+│       │   └── router.py       # /api/v1/discography/* (leer: público; escribir: admin)
 │       └── concerts/           # Fase 6 (futuro)
 ├── migrations/                 # Alembic: env.py (async) + versions/
 ├── tests/                      # Tests de integración por módulo (conftest.py, test_auth.py)
@@ -188,44 +188,72 @@ no crea tablas al arrancar. Tras tocar un modelo: `alembic revision --autogenera
 ## Discografía (Fase 5)
 
 Discos, recopilatorios, singles y bootlegs se modelan bajo un único concepto: **`Release`**
-(publicación), con un campo `release_type` que los distingue. No `Album`, porque un single o
-un bootleg no son "un álbum" en sentido estricto.
+(la obra, p. ej. "Tubular Bells"), con un campo `release_type` que los distingue. No `Album`,
+porque un single o un bootleg no son "un álbum" en sentido estricto.
+
+**Jerarquía de tres niveles** (como MusicBrainz distingue "release group" de "release"):
+
+```
+Release   (la obra abstracta: título, tipo)
+  └── Edition   (una publicación CONCRETA: país, sello, edition_name, fecha, is_primary)
+        └── Track   (la tracklist de ESA edición — puede variar entre ediciones)
+```
+
+Se introdujo `Edition` porque un mismo disco puede tener varias publicaciones reales —la
+original de un país, una reedición remasterizada, una edición limitada de otro país con otra
+portada y hasta otra *tracklist* (bonus tracks)—, y esos datos (fecha, país, temas, futuras
+imágenes de portada) no pueden vivir en la obra abstracta: varían por edición.
 
 Decisiones de diseño fijadas (para no repensarlas en cada fase futura):
 
-- **Una tabla, no una por tipo.** `releases` con `release_type` (`studio` / `compilation` /
-  `single` / `bootleg`) en vez de tablas de detalle por tipo (herencia con JOIN). Se añadirá
-  una tabla de detalle solo si un tipo necesita de verdad un campo exclusivo — hoy no hay
-  ninguno conocido.
+- **Una tabla `releases` con `release_type`, no una tabla por tipo.** `studio` /
+  `compilation` / `single` / `bootleg`, en vez de herencia con JOIN. Se añadirá una tabla de
+  detalle solo si un tipo necesita de verdad un campo exclusivo — hoy no hay ninguno conocido.
 - **`release_type` es texto validado por Python + `CHECK`, no un enum nativo de PostgreSQL.**
   Se sabe que este conjunto de valores va a crecer (`directo` está pendiente); añadir un valor
   a un `CHECK` es una migración más simple que la de un tipo nativo (`ALTER TYPE ... ADD
-  VALUE`). La columna guarda el *valor* del enum (`"studio"`), no el nombre (`"STUDIO"`), para
-  hablar el mismo idioma que el JSON de la API.
-- **Cada `Track` pertenece a una única `Release`** (1:N, sin compartir temas entre
-  publicaciones). Si el mismo tema aparece en un disco y en un recopilatorio, hoy son dos filas
-  independientes. El día que la deduplicación importe de verdad (al poblar recopilatorios),
-  se migra a una relación N:M con tabla intermedia.
-- **Leer el catálogo es público; crear exige ser administrador** (`require_admin`, en
-  `auth/dependencies.py`, reutilizable por futuros módulos de catálogo como conciertos/libros).
+  VALUE`). La columna guarda el *valor* del enum (`"studio"`), no el nombre (`"STUDIO"`).
+- **`Edition.is_primary`** marca qué edición mostrar por defecto (p. ej. la portada en una
+  lista) cuando un `Release` tiene varias. Se garantiza "como mucho una principal por obra"
+  con un **índice único parcial** (`uq_editions_release_primary`, `WHERE is_primary`) — no un
+  enum nativo ni un booleano sin restricción. Al marcar una edición como principal, el
+  `service` (`_demote_other_primary_editions`) desmarca automáticamente la anterior *antes* de
+  guardar: el admin nunca choca con el índice en el uso normal, solo actúa de red de seguridad.
+- **Cada `Track` pertenece a una única `Edition`** (1:N, sin compartir temas entre ediciones ni
+  publicaciones). Si el mismo tema aparece en dos ediciones o en un recopilatorio, hoy son filas
+  independientes. El día que la deduplicación importe de verdad, se migra a una relación N:M.
+- **Leer el catálogo es público; crear/editar/borrar exige ser administrador**
+  (`require_admin`, en `auth/dependencies.py`, reutilizable por futuros módulos de catálogo).
   No hay endpoint para promover a admin: se hace directamente en BD (o en los tests, vía sesión
   directa — ver `tests/conftest.py::db_session`).
-- **Los temas se crean anidados** en el body de `POST /releases` (`tracks: [...]`), no en un
-  endpoint aparte: así es como se cura el catálogo en la práctica, un disco siempre trae su
-  tracklist consigo.
+- **Los temas se crean anidados** en el body de `POST .../editions` (`tracks: [...]`), no en un
+  endpoint aparte: así es como se cura el catálogo en la práctica, una edición siempre trae su
+  tracklist consigo. `POST /releases` en cambio NO lleva `tracks`: crea solo la obra (título +
+  tipo); las ediciones se añaden después.
 
-Endpoints actuales: `GET /api/v1/discography/releases` (lista, filtro opcional `?type=`),
-`GET /api/v1/discography/releases/{id}` (detalle con temas), `POST` (crear, admin), `PATCH`
-(editar, admin) y `DELETE` (borrar, admin) sobre `/releases/{id}`.
+Endpoints actuales:
 
-**`PATCH` es un PATCH de verdad**: usa `model_dump(exclude_unset=True)` para distinguir un
-campo *omitido* (no se toca) de uno *enviado como `null`* (se aplica, p. ej. borrar una
-`release_date` que resultó incierta). Si el body incluye `tracks`, reemplaza la tracklist
-entera (se apoya en `cascade="all, delete-orphan"` del modelo) — no hay endpoints sueltos por
-tema, editar un disco es reenviar su lista completa corregida. Detalle de implementación a
-recordar: al reemplazar la colección hay que vaciarla y hacer `flush()` **antes** de añadir los
-temas nuevos, o SQLAlchemy puede emitir los `INSERT` antes que los `DELETE` de los viejos y
-chocar con el `UNIQUE(release_id, position)` cuando se repite un número de pista.
+| Método | Ruta | Acceso |
+|---|---|---|
+| `GET` | `/api/v1/discography/releases` | Público (filtro `?type=`) |
+| `GET` | `/api/v1/discography/releases/{id}` | Público (con ediciones y temas anidados) |
+| `POST` / `PATCH` / `DELETE` | `/api/v1/discography/releases[/{id}]` | Admin |
+| `POST` / `PATCH` / `DELETE` | `/api/v1/discography/releases/{id}/editions[/{edition_id}]` | Admin |
+
+**`PATCH` (en `Release` y en `Edition`) es un PATCH de verdad**: usa
+`model_dump(exclude_unset=True)` para distinguir un campo *omitido* (no se toca) de uno
+*enviado como `null`* (se aplica, p. ej. borrar una `release_date` que resultó incierta). Si el
+body de una edición incluye `tracks`, reemplaza la tracklist entera (se apoya en
+`cascade="all, delete-orphan"` del modelo). Detalle de implementación a recordar: al reemplazar
+la colección hay que vaciarla y hacer `flush()` **antes** de añadir los temas nuevos, o
+SQLAlchemy puede emitir los `INSERT` antes que los `DELETE` de los viejos y chocar con el
+`UNIQUE(edition_id, position)` cuando se repite un número de pista.
+
+**Pendiente, deliberadamente fuera de este remodelado**: portadas/contraportadas (`Image`,
+colgando de `Edition`) y el `StorageBackend` que las sirva (disco local en dev, Google Cloud
+Storage en producción, elegido por config como `DATABASE_URL`). Se construirá como paso
+siguiente, independiente de lo anterior — la base de datos solo guardará la URL de cada imagen,
+nunca los bytes.
 
 ---
 

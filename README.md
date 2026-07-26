@@ -80,9 +80,9 @@ ommadawn-api/
 │       │   ├── dependencies.py # get_current_user, require_admin (protegen endpoints)
 │       │   └── router.py       # Endpoints /api/v1/auth/*
 │       └── discography/
-│           ├── models.py       # Release (tipo studio/compilation/single/bootleg), Track
-│           ├── schemas.py      # ReleaseCreate/Read, TrackCreate/Read
-│           ├── service.py      # Listar, ver detalle, crear (con tracklist anidada)
+│           ├── models.py       # Release -> Edition (is_primary) -> Track
+│           ├── schemas.py      # Release/Edition/Track: Create, Read, Update
+│           ├── service.py      # CRUD anidado + demote de la edición principal
 │           └── router.py       # Endpoints /api/v1/discography/*
 ├── migrations/                 # Alembic: env.py (async) + versions/
 │   ├── env.py                  # Lee la URL de Settings, expone Base.metadata
@@ -218,21 +218,30 @@ sequenceDiagram
 
 ## Discografía
 
-Discos, recopilatorios, singles y bootlegs se catalogan bajo un único concepto,
-**`Release`** (publicación), distinguidos por `release_type`. Cada `Release` trae
-su lista de `Track` (temas), creada de forma anidada en el mismo `POST`.
+Discos, recopilatorios, singles y bootlegs se catalogan en tres niveles:
 
-Leer el catálogo es **público**; crear publicaciones exige ser **administrador**.
+```
+Release   (la obra: "Tubular Bells", con su tipo)
+  └── Edition   (una publicación concreta: país, sello, fecha, is_primary)
+        └── Track   (la tracklist de esa edición)
+```
+
+Un mismo disco puede tener varias ediciones (la original, una reedición remasterizada,
+una edición de otro país con otra portada y hasta otra *tracklist*). `is_primary` marca
+cuál se muestra por defecto; solo puede haber una principal por obra.
+
+Leer el catálogo es **público**; crear, editar o borrar exige ser **administrador**.
 
 ### Endpoints
 
 | Método | Ruta | Protegido | Descripción |
 |---|---|---|---|
-| `GET` | `/api/v1/discography/releases` | — | Lista publicaciones (filtro opcional `?type=studio\|compilation\|single\|bootleg`) |
-| `GET` | `/api/v1/discography/releases/{id}` | — | Detalle de una publicación, con sus temas |
-| `POST` | `/api/v1/discography/releases` | 🔒👑 | Crea una publicación (con su tracklist) |
-| `PATCH` | `/api/v1/discography/releases/{id}` | 🔒👑 | Edita solo los campos enviados; si incluye `tracks`, reemplaza toda la tracklist |
-| `DELETE` | `/api/v1/discography/releases/{id}` | 🔒👑 | Borra una publicación y sus temas |
+| `GET` | `/api/v1/discography/releases` | — | Lista obras (filtro opcional `?type=studio\|compilation\|single\|bootleg`) |
+| `GET` | `/api/v1/discography/releases/{id}` | — | Detalle de una obra, con sus ediciones y temas |
+| `POST` | `/api/v1/discography/releases` | 🔒👑 | Crea una obra (título + tipo, sin ediciones aún) |
+| `PATCH` / `DELETE` | `/api/v1/discography/releases/{id}` | 🔒👑 | Edita o borra una obra |
+| `POST` | `/api/v1/discography/releases/{id}/editions` | 🔒👑 | Añade una edición (con su tracklist) a una obra |
+| `PATCH` / `DELETE` | `/api/v1/discography/releases/{id}/editions/{edition_id}` | 🔒👑 | Edita o borra una edición |
 
 🔒👑 = requiere `Authorization: Bearer <access token>` de un usuario **administrador**
 (`is_admin=True`; se marca directamente en BD, no hay endpoint público para ello).
