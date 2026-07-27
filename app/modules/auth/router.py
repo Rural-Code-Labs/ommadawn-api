@@ -9,20 +9,23 @@ Prefijo: se monta bajo `/api/v1` en `main.py`, y este router anade `/auth`, asi
 que las rutas finales son `/api/v1/auth/...`.
 """
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, File, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
 from app.core.exceptions import ErrorMessage
+from app.core.storage import StorageBackend, get_storage_backend
 from app.modules.auth import service
-from app.modules.auth.dependencies import get_current_user
+from app.modules.auth.dependencies import get_current_user, require_superadmin
 from app.modules.auth.models import User
 from app.modules.auth.schemas import (
     LoginRequest,
     RefreshRequest,
     TokenPair,
+    UserAdminUpdate,
     UserCreate,
     UserRead,
+    UserUpdate,
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -47,6 +50,19 @@ _NO_AUTH = {
     "model": ErrorMessage,
     "description": "Falta el access token o no es valido",
 }
+_INVALID_AVATAR = {
+    "model": ErrorMessage,
+    "description": "Formato de imagen no soportado (usa JPEG, PNG o WEBP)",
+}
+_AVATAR_TOO_LARGE = {
+    "model": ErrorMessage,
+    "description": "La imagen supera el tamano maximo permitido (10 MB)",
+}
+_SUPERADMIN_REQUIRED = {
+    "model": ErrorMessage,
+    "description": "El usuario esta autenticado pero no es superadministrador",
+}
+_USER_NOT_FOUND = {"model": ErrorMessage, "description": "El usuario no existe"}
 
 
 @router.post(
@@ -133,3 +149,98 @@ async def logout(
 async def me(current_user: User = Depends(get_current_user)) -> User:
     """Devuelve el usuario autenticado. Util para que la app pinte el perfil."""
     return current_user
+
+
+@router.patch(
+    "/me",
+    response_model=UserRead,
+    summary="Editar los datos de perfil del usuario autenticado",
+    responses={status.HTTP_401_UNAUTHORIZED: _NO_AUTH},
+)
+async def update_me(
+    data: UserUpdate,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> User:
+    """Edita los campos de perfil presentes en el body (full_name, country, city,
+    birth_date). No toca username/email/contrasena/avatar/roles."""
+    return await service.update_profile(session, current_user, data)
+
+
+@router.post(
+    "/me/avatar",
+    response_model=UserRead,
+    summary="Subir (o sustituir) el avatar del usuario autenticado",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: _NO_AUTH,
+        status.HTTP_413_CONTENT_TOO_LARGE: _AVATAR_TOO_LARGE,
+        status.HTTP_422_UNPROCESSABLE_CONTENT: _INVALID_AVATAR,
+    },
+)
+async def upload_avatar(
+    file: UploadFile = File(description="Imagen de avatar (JPEG, PNG o WEBP)"),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    storage: StorageBackend = Depends(get_storage_backend),
+) -> User:
+    """Sube el avatar del usuario autenticado. Si ya tenia uno, lo sustituye."""
+    content = await file.read()
+    return await service.upload_avatar(
+        session, storage, current_user, content, file.content_type or ""
+    )
+
+
+@router.delete(
+    "/me/avatar",
+    response_model=UserRead,
+    summary="Borrar el avatar del usuario autenticado",
+    responses={status.HTTP_401_UNAUTHORIZED: _NO_AUTH},
+)
+async def delete_avatar(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    storage: StorageBackend = Depends(get_storage_backend),
+) -> User:
+    """Borra el avatar del usuario autenticado (si tenia uno)."""
+    return await service.delete_avatar(session, storage, current_user)
+
+
+# --- Administracion de usuarios (requiere SUPERadministrador) ---------------------
+
+
+@router.get(
+    "/users",
+    response_model=list[UserRead],
+    summary="Listar usuarios (requiere superadministrador)",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: _NO_AUTH,
+        status.HTTP_403_FORBIDDEN: _SUPERADMIN_REQUIRED,
+    },
+)
+async def list_users(
+    session: AsyncSession = Depends(get_session),
+    _superadmin: User = Depends(require_superadmin),
+) -> list[User]:
+    """Lista todos los usuarios. Pensado para elegir a quien promover a admin."""
+    return await service.list_users(session)
+
+
+@router.patch(
+    "/users/{user_id}",
+    response_model=UserRead,
+    summary="Cambiar si otro usuario es administrador (requiere superadministrador)",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: _NO_AUTH,
+        status.HTTP_403_FORBIDDEN: _SUPERADMIN_REQUIRED,
+        status.HTTP_404_NOT_FOUND: _USER_NOT_FOUND,
+    },
+)
+async def update_user_admin_status(
+    user_id: int,
+    data: UserAdminUpdate,
+    session: AsyncSession = Depends(get_session),
+    _superadmin: User = Depends(require_superadmin),
+) -> User:
+    """Promueve o degrada a un usuario como administrador (solo `is_admin`,
+    no `is_super_admin`: nombrar un superadmin sigue siendo solo por BD)."""
+    return await service.set_admin_status(session, user_id, data.is_admin)

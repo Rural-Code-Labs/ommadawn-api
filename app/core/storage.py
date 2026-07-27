@@ -14,6 +14,7 @@ from functools import lru_cache
 from pathlib import Path
 
 import anyio
+from fastapi import HTTPException, status
 
 from app.core.config import get_settings
 
@@ -64,6 +65,45 @@ class LocalStorageBackend(StorageBackend):
             path.unlink(missing_ok=True)
 
         await anyio.to_thread.run_sync(_delete)
+
+
+# --- Validacion de imagenes subidas ---------------------------------------------
+#
+# Compartida por cualquier modulo que suba imagenes (discografia, avatar de
+# usuario...): vive aqui, no en cada `service.py`, para no repetir la misma
+# regla dos veces y que ambos consumidores se comporten igual.
+
+# Content-type aceptado -> extension del fichero guardado. Cerrado a proposito
+# (formatos de imagen web habituales); cualquier otro se rechaza con 422.
+ALLOWED_IMAGE_CONTENT_TYPES = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+}
+invalid_image_type_exception = HTTPException(
+    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+    detail="Formato de imagen no soportado (usa JPEG, PNG o WEBP)",
+)
+
+# 10 MB: generoso para una foto o portada, pequeno para un ataque de subida masiva.
+MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024
+image_too_large_exception = HTTPException(
+    status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+    detail="La imagen supera el tamano maximo permitido (10 MB)",
+)
+
+
+def validate_image_upload(content: bytes, content_type: str) -> str:
+    """Valida un fichero de imagen subido. Devuelve la extension a usar.
+
+    Lanza 422 (formato no soportado) o 413 (demasiado grande) si no pasa la
+    validacion. Se llama ANTES de guardar nada en el StorageBackend.
+    """
+    if content_type not in ALLOWED_IMAGE_CONTENT_TYPES:
+        raise invalid_image_type_exception
+    if len(content) > MAX_IMAGE_SIZE_BYTES:
+        raise image_too_large_exception
+    return ALLOWED_IMAGE_CONTENT_TYPES[content_type]
 
 
 @lru_cache

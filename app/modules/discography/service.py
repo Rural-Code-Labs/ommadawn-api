@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.storage import StorageBackend
+from app.core.storage import StorageBackend, validate_image_upload
 from app.modules.discography.models import Edition, Image, ImageType, Release, ReleaseType, Track
 from app.modules.discography.schemas import (
     EditionCreate,
@@ -35,25 +35,6 @@ edition_not_found_exception = HTTPException(
 image_not_found_exception = HTTPException(
     status_code=status.HTTP_404_NOT_FOUND,
     detail="Imagen no encontrada",
-)
-
-# Content-type aceptado -> extension del fichero guardado. Cerrado a proposito
-# (formatos de imagen web habituales); cualquier otro se rechaza con 422.
-_ALLOWED_IMAGE_CONTENT_TYPES = {
-    "image/jpeg": ".jpg",
-    "image/png": ".png",
-    "image/webp": ".webp",
-}
-invalid_image_type_exception = HTTPException(
-    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-    detail="Formato de imagen no soportado (usa JPEG, PNG o WEBP)",
-)
-
-# 10 MB: generoso para una portada, pequeno para un ataque de subida masiva.
-MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024
-image_too_large_exception = HTTPException(
-    status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-    detail="La imagen supera el tamano maximo permitido (10 MB)",
 )
 
 # Carga en cadena: las ediciones de un Release, y los temas/imagenes de cada
@@ -256,10 +237,7 @@ async def upload_image(
     """
     edition = await _get_edition(session, release_id, edition_id)
 
-    if content_type not in _ALLOWED_IMAGE_CONTENT_TYPES:
-        raise invalid_image_type_exception
-    if len(content) > MAX_IMAGE_SIZE_BYTES:
-        raise image_too_large_exception
+    extension = validate_image_upload(content, content_type)
 
     if image_type != ImageType.OTHER:
         previous = [img for img in edition.images if img.image_type == image_type]
@@ -269,7 +247,6 @@ async def upload_image(
         if previous:
             await session.flush()
 
-    extension = _ALLOWED_IMAGE_CONTENT_TYPES[content_type]
     url = await storage.save(filename=f"{uuid4().hex}{extension}", content=content)
 
     image = Image(edition_id=edition_id, image_type=image_type, url=url)

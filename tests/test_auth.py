@@ -6,8 +6,11 @@ marcar cada test: pytest-asyncio los detecta por ser `async def`.
 """
 
 from httpx import AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.modules.auth.models import User
 
 BASE = "/api/v1/auth"
 
@@ -227,3 +230,325 @@ async def test_logout_requires_authentication(client: AsyncClient):
         f"{BASE}/logout", json={"refresh_token": tokens["refresh_token"]}
     )
     assert resp.status_code == 401
+
+
+# --- Avatar ----------------------------------------------------------------------
+
+# Un JPEG minimo valido (cabecera SOI + EOI): basta para pasar la validacion de
+# content-type, no hace falta una imagen real para probar el flujo de subida.
+FAKE_JPEG_BYTES = b"\xff\xd8\xff\xe0" + b"\x00" * 16 + b"\xff\xd9"
+
+
+async def test_upload_avatar_requires_authentication(client: AsyncClient):
+    resp = await client.post(
+        f"{BASE}/me/avatar",
+        files={"file": ("avatar.jpg", FAKE_JPEG_BYTES, "image/jpeg")},
+    )
+    assert resp.status_code == 401
+
+
+async def test_can_upload_own_avatar(client: AsyncClient):
+    tokens = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    resp = await client.post(
+        f"{BASE}/me/avatar",
+        files={"file": ("avatar.jpg", FAKE_JPEG_BYTES, "image/jpeg")},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["avatar_url"].startswith("http://testserver/media/")
+
+    # Y se refleja al leer /me.
+    me = await client.get(f"{BASE}/me", headers=headers)
+    assert me.json()["avatar_url"] == body["avatar_url"]
+
+
+async def test_uploading_a_new_avatar_replaces_the_previous_one(client: AsyncClient):
+    tokens = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    first = await client.post(
+        f"{BASE}/me/avatar",
+        files={"file": ("v1.jpg", FAKE_JPEG_BYTES, "image/jpeg")},
+        headers=headers,
+    )
+    second = await client.post(
+        f"{BASE}/me/avatar",
+        files={"file": ("v2.jpg", FAKE_JPEG_BYTES, "image/jpeg")},
+        headers=headers,
+    )
+    assert second.status_code == 200
+    assert second.json()["avatar_url"] != first.json()["avatar_url"]
+
+
+async def test_upload_avatar_rejects_unsupported_content_type(client: AsyncClient):
+    tokens = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    resp = await client.post(
+        f"{BASE}/me/avatar",
+        files={"file": ("avatar.pdf", b"%PDF-1.4 ...", "application/pdf")},
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
+async def test_upload_avatar_rejects_oversized_image(client: AsyncClient, monkeypatch):
+    from app.core import storage
+
+    # Bajamos el limite a 10 bytes para no tener que generar un fichero enorme.
+    monkeypatch.setattr(storage, "MAX_IMAGE_SIZE_BYTES", 10)
+
+    tokens = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    resp = await client.post(
+        f"{BASE}/me/avatar",
+        files={"file": ("avatar.jpg", FAKE_JPEG_BYTES, "image/jpeg")},
+        headers=headers,
+    )
+    assert resp.status_code == 413
+
+
+async def test_delete_avatar_requires_authentication(client: AsyncClient):
+    resp = await client.delete(f"{BASE}/me/avatar")
+    assert resp.status_code == 401
+
+
+async def test_can_delete_own_avatar(client: AsyncClient):
+    tokens = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+    await client.post(
+        f"{BASE}/me/avatar",
+        files={"file": ("avatar.jpg", FAKE_JPEG_BYTES, "image/jpeg")},
+        headers=headers,
+    )
+
+    resp = await client.delete(f"{BASE}/me/avatar", headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["avatar_url"] is None
+
+
+async def test_deleting_avatar_when_none_exists_is_a_no_op(client: AsyncClient):
+    tokens = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    resp = await client.delete(f"{BASE}/me/avatar", headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["avatar_url"] is None
+
+
+# --- Seguridad: no se puede escalar privilegios al registrarse -------------------
+
+
+async def test_register_cannot_inject_admin_roles(client: AsyncClient):
+    # Ni is_admin ni is_super_admin existen en UserCreate: Pydantic los ignora y
+    # el service nunca los lee, asi que da igual lo que mande el cliente.
+    resp = await client.post(
+        f"{BASE}/register",
+        json={**CREDS, "is_admin": True, "is_super_admin": True},
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["is_admin"] is False
+    assert body["is_super_admin"] is False
+
+
+# --- Perfil: PATCH /me -------------------------------------------------------------
+
+
+async def test_update_profile_requires_authentication(client: AsyncClient):
+    resp = await client.patch(f"{BASE}/me", json={"country": "España"})
+    assert resp.status_code == 401
+
+
+async def test_update_profile_only_touches_sent_fields(client: AsyncClient):
+    tokens = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    resp = await client.patch(f"{BASE}/me", json={"country": "España"}, headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["country"] == "España"
+    # No enviado: sigue como se registro.
+    assert body["full_name"] == CREDS["full_name"]
+    assert body["city"] is None
+
+
+async def test_update_profile_sets_birth_date(client: AsyncClient):
+    tokens = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    resp = await client.patch(
+        f"{BASE}/me", json={"birth_date": "1953-05-15"}, headers=headers
+    )
+    assert resp.status_code == 200
+    assert resp.json()["birth_date"] == "1953-05-15"
+
+
+async def test_update_profile_can_clear_a_field_with_null(client: AsyncClient):
+    tokens = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+    await client.patch(f"{BASE}/me", json={"country": "España"}, headers=headers)
+
+    resp = await client.patch(f"{BASE}/me", json={"country": None}, headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["country"] is None
+
+
+async def test_update_profile_cannot_touch_admin_fields(client: AsyncClient):
+    # UserUpdate no declara is_admin/is_super_admin/username/email: si se mandan,
+    # Pydantic los ignora (no son campos del schema, no dan ni 422).
+    tokens = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    resp = await client.patch(
+        f"{BASE}/me", json={"is_admin": True, "username": "otro"}, headers=headers
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["is_admin"] is False
+    assert body["username"] == CREDS["username"]
+
+
+# --- Superadmin: gestion de quien es admin -----------------------------------------
+
+SUPERADMIN_CREDS = {
+    "username": "root",
+    "email": "root@ommadawn.com",
+    "password": "rootpassword1",
+}
+
+
+async def _superadmin_headers(client: AsyncClient, db_session: AsyncSession) -> dict:
+    """Registra un usuario, lo marca is_super_admin=True en BD y hace login."""
+    await client.post(f"{BASE}/register", json=SUPERADMIN_CREDS)
+
+    user = (
+        await db_session.execute(
+            select(User).where(User.username == SUPERADMIN_CREDS["username"])
+        )
+    ).scalar_one()
+    user.is_super_admin = True
+    await db_session.commit()
+
+    login = await client.post(
+        f"{BASE}/login",
+        json={
+            "username_or_email": SUPERADMIN_CREDS["username"],
+            "password": SUPERADMIN_CREDS["password"],
+        },
+    )
+    return {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+
+async def test_list_users_requires_authentication(client: AsyncClient):
+    resp = await client.get(f"{BASE}/users")
+    assert resp.status_code == 401
+
+
+async def test_list_users_requires_superadmin(client: AsyncClient):
+    tokens = await _register_and_login(client)  # usuario normal
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    resp = await client.get(f"{BASE}/users", headers=headers)
+    assert resp.status_code == 403
+
+
+async def test_regular_admin_cannot_manage_other_admins(
+    client: AsyncClient, db_session: AsyncSession
+):
+    # Un admin normal (is_admin=True, is_super_admin=False) no basta: hace falta
+    # ser superadmin para decidir quien es admin.
+    await client.post(f"{BASE}/register", json=CREDS)
+    admin_user = (
+        await db_session.execute(select(User).where(User.username == CREDS["username"]))
+    ).scalar_one()
+    admin_user.is_admin = True
+    await db_session.commit()
+
+    login = await client.post(
+        f"{BASE}/login",
+        json={"username_or_email": CREDS["username"], "password": CREDS["password"]},
+    )
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    resp = await client.get(f"{BASE}/users", headers=headers)
+    assert resp.status_code == 403
+
+
+async def test_superadmin_can_list_users(client: AsyncClient, db_session: AsyncSession):
+    await _register_and_login(client)
+    headers = await _superadmin_headers(client, db_session)
+
+    resp = await client.get(f"{BASE}/users", headers=headers)
+    assert resp.status_code == 200
+    usernames = {u["username"] for u in resp.json()}
+    assert {CREDS["username"], SUPERADMIN_CREDS["username"]}.issubset(usernames)
+
+
+async def test_superadmin_can_promote_another_user_to_admin(
+    client: AsyncClient, db_session: AsyncSession
+):
+    await client.post(f"{BASE}/register", json=CREDS)
+    target = (
+        await db_session.execute(select(User).where(User.username == CREDS["username"]))
+    ).scalar_one()
+    headers = await _superadmin_headers(client, db_session)
+
+    resp = await client.patch(
+        f"{BASE}/users/{target.id}", json={"is_admin": True}, headers=headers
+    )
+    assert resp.status_code == 200
+    assert resp.json()["is_admin"] is True
+
+
+async def test_superadmin_can_demote_an_admin(
+    client: AsyncClient, db_session: AsyncSession
+):
+    await client.post(f"{BASE}/register", json=CREDS)
+    target = (
+        await db_session.execute(select(User).where(User.username == CREDS["username"]))
+    ).scalar_one()
+    target.is_admin = True
+    await db_session.commit()
+    target_id = target.id
+
+    headers = await _superadmin_headers(client, db_session)
+    resp = await client.patch(
+        f"{BASE}/users/{target_id}", json={"is_admin": False}, headers=headers
+    )
+    assert resp.status_code == 200
+    assert resp.json()["is_admin"] is False
+
+
+async def test_update_user_admin_status_unknown_user_returns_404(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _superadmin_headers(client, db_session)
+    resp = await client.patch(
+        f"{BASE}/users/999", json={"is_admin": True}, headers=headers
+    )
+    assert resp.status_code == 404
+
+
+async def test_update_user_admin_status_cannot_touch_super_admin_flag(
+    client: AsyncClient, db_session: AsyncSession
+):
+    # UserAdminUpdate solo declara is_admin: is_super_admin ni se puede enviar.
+    await client.post(f"{BASE}/register", json=CREDS)
+    target = (
+        await db_session.execute(select(User).where(User.username == CREDS["username"]))
+    ).scalar_one()
+    target_id = target.id
+    headers = await _superadmin_headers(client, db_session)
+
+    resp = await client.patch(
+        f"{BASE}/users/{target_id}",
+        json={"is_admin": True, "is_super_admin": True},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["is_super_admin"] is False

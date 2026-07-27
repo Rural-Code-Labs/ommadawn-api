@@ -6,9 +6,9 @@ restricciones). La logica (registrar, loguear, validar contrasenas) NO va aqui:
 ira en el `service`.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, func
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -37,6 +37,21 @@ class User(Base):
     # login con Google/Facebook (donde puede que solo llegue el email).
     full_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
+    # --- Datos de perfil (opcionales) ---
+    # Ninguno se pide en el registro: se rellenan mas adelante (ver PATCH
+    # /auth/me, aun por construir). Texto libre, no un catalogo cerrado de
+    # paises/ciudades: mismo criterio que Edition.country en discografia.
+    country: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    city: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    birth_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+    # URL del avatar (ver app/core/storage.py). Solo la URL, nunca los bytes:
+    # mismo criterio que Image.url en discografia. Una sola imagen por usuario,
+    # sin tabla aparte: a diferencia de una Edition (que puede tener varias
+    # imagenes con distinto tipo), un usuario solo tiene UN avatar, asi que un
+    # simple campo nullable basta; subir uno nuevo sustituye al anterior.
+    avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
     # Contrasena SIEMPRE hasheada (argon2), nunca en claro.
     # Nullable a proposito: un usuario que en el futuro entre solo con un
     # proveedor externo (Google...) no tendra contrasena local.
@@ -50,6 +65,15 @@ class User(Base):
     )
     # Rol de administrador (para gestionar la discografia en fases futuras).
     is_admin: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    # Rol de SUPERadministrador: puede cambiar el is_admin de otros usuarios
+    # (ver PATCH /auth/users/{id}). Es independiente de is_admin -> un
+    # superadmin tiene automaticamente los mismos permisos que un admin
+    # (ver require_admin en dependencies.py), aunque su propio is_admin sea
+    # False. No hay endpoint para nombrar a un superadmin: se hace en BD,
+    # mismo criterio que is_admin hoy.
+    is_super_admin: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
     )
 

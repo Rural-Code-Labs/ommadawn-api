@@ -16,7 +16,11 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
-from app.core.exceptions import admin_required_exception, credentials_exception
+from app.core.exceptions import (
+    admin_required_exception,
+    credentials_exception,
+    superadmin_required_exception,
+)
 from app.core.security import decode_access_token
 from app.modules.auth.models import User
 
@@ -59,13 +63,29 @@ async def get_current_user(
 
 
 async def require_admin(current_user: User = Depends(get_current_user)) -> User:
-    """Exige que el usuario autenticado sea ademas administrador.
+    """Exige que el usuario autenticado sea administrador (o superadministrador).
 
     Se apoya en `get_current_user` (asi que tambien exige un access token
     valido). Es lo que usan los endpoints de ESCRITURA de los modulos de
     catalogo (Fase 5 en adelante): crear/editar un `Release` exige ser admin,
     aunque leer el catalogo sea publico.
+
+    Un superadmin pasa este check aunque su propio `is_admin` sea False: el
+    rol superior implica el inferior, sin tener que marcar las dos banderas
+    a mano en BD.
     """
-    if not current_user.is_admin:
+    if not (current_user.is_admin or current_user.is_super_admin):
         raise admin_required_exception
+    return current_user
+
+
+async def require_superadmin(current_user: User = Depends(get_current_user)) -> User:
+    """Exige que el usuario autenticado sea SUPERadministrador.
+
+    Es lo que usa el endpoint que cambia el `is_admin` de OTROS usuarios
+    (ver `PATCH /auth/users/{id}`): decidir quien es admin es un poder mas
+    alto que ser admin, asi que un admin normal no basta.
+    """
+    if not current_user.is_super_admin:
+        raise superadmin_required_exception
     return current_user

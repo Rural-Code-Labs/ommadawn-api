@@ -12,7 +12,9 @@ Recordatorio del diseno:
 """
 
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
+from fastapi import HTTPException, status
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,10 +33,19 @@ from app.core.security import (
     hash_refresh_token,
     verify_password,
 )
+from app.core.storage import StorageBackend, validate_image_upload
 from app.modules.auth.models import RefreshToken, User
-from app.modules.auth.schemas import TokenPair, UserCreate
+from app.modules.auth.schemas import TokenPair, UserCreate, UserUpdate
 
 settings = get_settings()
+
+# 404 -> el usuario objetivo de una operacion de administracion no existe.
+# Especifico de este modulo (no vive en core/exceptions.py, que es para lo
+# verdaderamente transversal).
+user_not_found_exception = HTTPException(
+    status_code=status.HTTP_404_NOT_FOUND,
+    detail="Usuario no encontrado",
+)
 
 # Vida del access token en segundos. Es justo lo que dura el JWT (su `exp` se
 # calcula con los mismos minutos en core/security.py), y se expone al cliente en
@@ -262,3 +273,91 @@ async def refresh_tokens(session: AsyncSession, refresh_token: str) -> TokenPair
         refresh_token=new_refresh_token,
         expires_in=ACCESS_TOKEN_EXPIRES_IN,
     )
+
+
+# --- Avatar ----------------------------------------------------------------------
+
+
+async def upload_avatar(
+    session: AsyncSession,
+    storage: StorageBackend,
+    user: User,
+    content: bytes,
+    content_type: str,
+) -> User:
+    """Sube (o sustituye) el avatar del usuario autenticado.
+
+    A diferencia de las imagenes de discografia (varias por edicion, con un
+    `image_type`), aqui basta un simple campo `avatar_url`: un usuario solo
+    tiene UN avatar. Subir uno nuevo borra el fichero anterior antes de guardar
+    el que llega.
+    """
+    extension = validate_image_upload(content, content_type)
+
+    if user.avatar_url:
+        await storage.delete(user.avatar_url)
+
+    user.avatar_url = await storage.save(
+        filename=f"{uuid4().hex}{extension}", content=content
+    )
+    await session.commit()
+    await session.refresh(user)
+    return user
+
+
+async def delete_avatar(session: AsyncSession, storage: StorageBackend, user: User) -> User:
+    """Borra el avatar del usuario autenticado, si tiene uno.
+
+    Idempotente: si no tenia avatar, no hace nada y devuelve el usuario igual.
+    """
+    if user.avatar_url:
+        await storage.delete(user.avatar_url)
+        user.avatar_url = None
+        await session.commit()
+        await session.refresh(user)
+    return user
+
+
+# --- Perfil (el propio usuario) ---------------------------------------------------
+
+
+async def update_profile(session: AsyncSession, user: User, data: UserUpdate) -> User:
+    """Edita los datos de perfil del usuario autenticado.
+
+    PATCH real: `model_dump(exclude_unset=True)` distingue un campo OMITIDO (no
+    se toca) de uno enviado como `null` (se aplica, p. ej. borrar una
+    `birth_date` puesta por error). Mismo patron que `ReleaseUpdate` en
+    discografia.
+    """
+    updates = data.model_dump(exclude_unset=True)
+    for field, value in updates.items():
+        setattr(user, field, value)
+
+    await session.commit()
+    await session.refresh(user)
+    return user
+
+
+# --- Administracion de usuarios (superadmin) --------------------------------------
+
+
+async def list_users(session: AsyncSession) -> list[User]:
+    """Lista todos los usuarios. Solo la usa un superadmin (ver require_superadmin)."""
+    result = await session.execute(select(User).order_by(User.username))
+    return list(result.scalars().all())
+
+
+async def set_admin_status(session: AsyncSession, user_id: int, is_admin: bool) -> User:
+    """Cambia el `is_admin` de otro usuario. Solo la usa un superadmin.
+
+    No toca `is_super_admin`: nombrar a un superadmin sigue siendo solo por BD
+    (ver el docstring de `User.is_super_admin`).
+    """
+    user = await session.get(User, user_id)
+    if user is None:
+        raise user_not_found_exception
+
+    user.is_admin = is_admin
+    await session.commit()
+    await session.refresh(user)
+    return user

@@ -116,6 +116,25 @@ async def test_create_release_requires_admin(client: AsyncClient):
     assert resp.status_code == 403
 
 
+async def test_superadmin_without_is_admin_can_also_create_releases(
+    client: AsyncClient, db_session: AsyncSession
+):
+    # Regresion: require_admin acepta is_admin O is_super_admin (ver
+    # auth/dependencies.py). Un superadmin no necesita ademas is_admin=True.
+    creds = {"username": "root", "email": "root@ommadawn.com", "password": "rootpassword1"}
+    await client.post(f"{AUTH_BASE}/register", json=creds)
+    user = (
+        await db_session.execute(select(User).where(User.username == creds["username"]))
+    ).scalar_one()
+    assert user.is_admin is False
+    user.is_super_admin = True
+    await db_session.commit()
+
+    headers = await _login(client, creds["username"], creds["password"])
+    resp = await client.post(f"{BASE}/releases", json=TUBULAR_BELLS, headers=headers)
+    assert resp.status_code == 201
+
+
 # --- Release: creacion, edicion y borrado -----------------------------------------
 
 
@@ -530,10 +549,11 @@ async def test_upload_rejects_unsupported_content_type(
 async def test_upload_rejects_oversized_image(
     client: AsyncClient, db_session: AsyncSession, monkeypatch
 ):
-    from app.modules.discography import service
+    from app.core import storage
 
     # Bajamos el limite a 10 bytes para no tener que generar un fichero enorme.
-    monkeypatch.setattr(service, "MAX_IMAGE_SIZE_BYTES", 10)
+    # La validacion vive en core/storage.py (compartida con el avatar de usuario).
+    monkeypatch.setattr(storage, "MAX_IMAGE_SIZE_BYTES", 10)
 
     headers = await _admin_headers(client, db_session)
     release_id, edition_id = await _create_release_and_edition(client, headers)

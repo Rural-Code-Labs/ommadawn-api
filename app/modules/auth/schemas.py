@@ -9,7 +9,7 @@ que campos se devuelven (p. ej. `hashed_password` no aparece en ninguno de los
 de salida: jamas sale de la BD).
 """
 
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -48,6 +48,33 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
+class UserUpdate(BaseModel):
+    """Datos de perfil editables por el propio usuario (body de PATCH /auth/me).
+
+    PATCH de verdad: solo se aplican los campos PRESENTES en el body (el
+    service usa `model_dump(exclude_unset=True)`), igual que en discografia.
+    Deliberadamente NO estan aqui `username`, `email`, la contrasena, `avatar`
+    (tiene su propio endpoint de subida) ni `is_admin`/`is_super_admin`: cada
+    uno tiene sus propias reglas (unicidad, verificacion...) y se abordaran
+    aparte si hace falta.
+    """
+
+    full_name: str | None = Field(default=None, max_length=120)
+    country: str | None = Field(default=None, max_length=100)
+    city: str | None = Field(default=None, max_length=100)
+    birth_date: date | None = None
+
+
+class UserAdminUpdate(BaseModel):
+    """Body de PATCH /auth/users/{id}: cambia si un usuario es administrador.
+
+    Solo toca `is_admin`. Deliberadamente no permite tocar `is_super_admin`:
+    nombrar a un superadmin sigue siendo solo por BD.
+    """
+
+    is_admin: bool
+
+
 # --- Salida (response) ---------------------------------------------------------
 
 
@@ -63,8 +90,13 @@ class UserRead(BaseModel):
     username: str
     email: str
     full_name: str | None
+    country: str | None
+    city: str | None
+    birth_date: date | None
+    avatar_url: str | None
     is_active: bool
     is_admin: bool
+    is_super_admin: bool
     created_at: datetime
 
     model_config = {"from_attributes": True}

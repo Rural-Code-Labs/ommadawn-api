@@ -53,6 +53,13 @@ admin_required_exception = HTTPException(
     detail="Se requieren permisos de administrador",
 )
 
+# 403 -> el usuario es admin, incluso, pero no SUPERadministrador. La usan los
+# endpoints que gestionan el rol de otros usuarios (quien es admin).
+superadmin_required_exception = HTTPException(
+    status_code=status.HTTP_403_FORBIDDEN,
+    detail="Se requieren permisos de superadministrador",
+)
+
 # 409 Conflict -> intentar registrar algo que ya existe. Separamos username de
 # email para que la app pueda decirle al usuario que campo cambiar.
 username_taken_exception = HTTPException(
