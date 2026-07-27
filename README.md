@@ -183,8 +183,18 @@ Se manejan **dos tokens con roles distintos**:
 | `POST` | `/api/v1/auth/refresh` | — | Rota el refresh token y emite un par nuevo |
 | `POST` | `/api/v1/auth/logout` | 🔒 | Revoca el refresh token (`204`) |
 | `GET` | `/api/v1/auth/me` | 🔒 | Devuelve el usuario autenticado |
+| `PATCH` | `/api/v1/auth/me` | 🔒 | Edita `full_name`, `country`, `city`, `birth_date` (solo los campos enviados) |
+| `POST` | `/api/v1/auth/me/avatar` | 🔒 | Sube (o sustituye) el avatar (`multipart/form-data`) |
+| `DELETE` | `/api/v1/auth/me/avatar` | 🔒 | Borra el avatar (idempotente) |
+| `GET` | `/api/v1/auth/users` | 🔒👑 | Lista todos los usuarios |
+| `PATCH` | `/api/v1/auth/users/{id}` | 🔒👑 | Cambia si otro usuario es `admin` |
 
-🔒 = requiere `Authorization: Bearer <access token>`.
+🔒 = requiere `Authorization: Bearer <access token>`. 🔒👑 = requiere además ser
+**superadministrador** (`is_super_admin=True`; como con `is_admin`, se marca directamente en
+BD — no hay endpoint para auto-nombrarse superadmin).
+
+> **Pendiente**: editar `username`/`email`/contraseña sigue sin endpoint (requieren
+> comprobaciones propias de unicidad/verificación no abordadas todavía).
 
 ### Flujo: del login al logout
 
@@ -265,7 +275,7 @@ antes de empezar la siguiente.
 | Fase | Contenido | Estado |
 |---|---|---|
 | **1 — Esqueleto** | Estructura del proyecto, capa `core/` (config, base de datos, `Base` ORM) y app FastAPI con `/health`. | ✅ Hecha |
-| **2 — Modelo de usuario** | Model ORM `User`: login por username o email (únicos), `full_name` y `hashed_password` opcionales (preparado para OAuth), `is_active`, `is_admin`, timestamps. | ✅ Hecha |
+| **2 — Modelo de usuario** | Model ORM `User`: login por username o email (únicos), `full_name` y `hashed_password` opcionales (preparado para OAuth), `is_active`, `is_admin`, timestamps. Ampliado con datos de perfil editables (`country`, `city`, `birth_date`, avatar) y rol `is_super_admin`. | ✅ Hecha |
 | **3 — Flujo de tokens** | Hashing argon2, JWT access token y refresh token con rotación. | ✅ Hecha |
 | **4 — Endpoints de auth** | `register`, `login`, `refresh`, `logout`, `me` + tests de integración. Cierra el bloque de auth. | ✅ Hecha |
 | **5 — Discografía** | Álbumes de estudio, recopilatorios, singles, bootlegs, directos… y sus temas/pistas. | 🚧 En marcha (discos ya funcionando) |

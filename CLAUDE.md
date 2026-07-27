@@ -45,6 +45,12 @@ mantenerse estable y bien versionado.
   al arrancar. `migrations/env.py` lee la `DATABASE_URL` de `Settings` (una sola fuente) e
   importa `Base.metadata`; **al añadir un módulo nuevo hay que importar sus `models` en
   `env.py`** o `autogenerate` no verá sus tablas.
+- **Edición de perfil y roles en auth (ver sección "Perfil, avatar y roles" más abajo)**:
+  `PATCH /auth/me` (perfil), avatar (`POST`/`DELETE /auth/me/avatar`, reutiliza
+  `StorageBackend` de discografía) y un rol de **superadministrador** que gestiona quién es
+  `admin` (`GET`/`PATCH /auth/users...`). Ninguno de los dos roles (`is_admin`,
+  `is_super_admin`) tiene forma de auto-asignarse por API: **verificado con un test** que
+  registrarse con esos campos en el body no escala privilegios (Pydantic los ignora).
 
 ---
 
@@ -186,6 +192,40 @@ no crea tablas al arrancar. Tras tocar un modelo: `alembic revision --autogenera
 
 ---
 
+## Perfil, avatar y roles (auth)
+
+Ampliación sobre el bloque de auth ya cerrado (Fases 1–4): editar el propio perfil, subir un
+avatar, y un rol de **superadministrador** que decide quién es `admin`.
+
+- **`PATCH /auth/me`** edita `full_name`, `country`, `city`, `birth_date` — un PATCH real
+  (`model_dump(exclude_unset=True)`, mismo patrón que `ReleaseUpdate`). Deliberadamente
+  **no** toca `username`, `email`, contraseña, avatar ni roles: cada uno tiene sus propias
+  reglas (unicidad, verificación, permisos) y se aborda aparte si hace falta.
+- **Avatar** (`POST`/`DELETE /auth/me/avatar`): reutiliza `StorageBackend` y
+  `validate_image_upload` de discografía (ver más abajo el porqué de esa extracción). A
+  diferencia de `Image` en discografía (varias imágenes por edición, con `image_type`), aquí
+  basta un simple `User.avatar_url` nullable: un usuario tiene como mucho un avatar. Subir uno
+  nuevo sustituye al anterior (fichero incluido); `DELETE` es idempotente.
+- **`is_super_admin`**: campo independiente de `is_admin`. `require_admin` (la dependencia
+  que ya protegía discografía) ahora acepta `is_admin` **o** `is_super_admin` — un superadmin
+  tiene automáticamente los poderes de admin sin necesitar las dos banderas a la vez. Una
+  nueva dependencia `require_superadmin` protege exclusivamente `GET /auth/users` (listar,
+  para elegir a quién promover) y `PATCH /auth/users/{id}` (cambia el `is_admin` de otro
+  usuario). **No** permite tocar `is_super_admin` de nadie: nombrar a un superadmin sigue
+  siendo solo por BD, igual que hoy con `is_admin`.
+- **Validación de imágenes compartida**: al construir el avatar se detectó que iba a duplicar
+  la misma lógica (content-type permitido, tamaño máximo) que ya vivía en
+  `discography/service.py`. Se extrajo a `app/core/storage.py`
+  (`validate_image_upload`, `ALLOWED_IMAGE_CONTENT_TYPES`, `MAX_IMAGE_SIZE_BYTES`): cualquier
+  módulo que suba imágenes se comporta igual, sin repetir la regla.
+- **Gotcha de migraciones a recordar**: añadir una columna `NOT NULL` a una tabla que **ya
+  tiene filas** (como `users` aquí) necesita `server_default` en la migración — a diferencia
+  de cuando `is_admin` se creó en la migración inicial, con la tabla recién creada y vacía.
+  Sin ese `server_default`, Postgres no sabe qué poner en las filas existentes y la migración
+  falla.
+
+---
+
 ## Discografía (Fase 5)
 
 Discos, recopilatorios, singles y bootlegs se modelan bajo un único concepto: **`Release`**
@@ -292,7 +332,7 @@ solo sirve de referencia de estilo) y se reparte en varias fases:
 | Fase | Contenido | Estado |
 |---|---|---|
 | **Fase 1 — Esqueleto / schema base** | Estructura del proyecto: `pyproject.toml`, `.env`, capa `core/` (config, base de datos, `Base` ORM) y app FastAPI que arranca con `/health`. | ✅ Hecha |
-| **Fase 2 — Modelo de usuario** | Model ORM `User` (tabla `users`): login por username o email (ambos únicos), `full_name` y `hashed_password` opcionales (preparado para OAuth futuro), `is_active`, `is_admin`, timestamps. | ✅ Hecha |
+| **Fase 2 — Modelo de usuario** | Model ORM `User` (tabla `users`): login por username o email (ambos únicos), `full_name` y `hashed_password` opcionales (preparado para OAuth futuro), `is_active`, `is_admin`, timestamps. Ampliado después con perfil editable (`country`, `city`, `birth_date`, avatar) y `is_super_admin` — ver "Perfil, avatar y roles" más abajo. | ✅ Hecha |
 | **Fase 3 — Flujo de tokens** | Access token + refresh token con rotación, hashing de contraseñas (argon2), seguridad JWT. | ✅ Hecha |
 | **Fase 4 — Endpoints de auth** | `register`, `login`, `refresh`, `logout`, `me` + tests de integración. Cierra el bloque de auth. | ✅ Hecha |
 | **Fase 5 — Discografía** | Discos (álbumes de estudio), recopilatorios, singles, bootlegs, directos… y sus temas/pistas. | 🚧 En marcha (modelo + endpoints de discos listos; falta poblar y añadir "directo") |
