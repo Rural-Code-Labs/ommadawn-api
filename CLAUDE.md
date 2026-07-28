@@ -236,7 +236,8 @@ porque un single o un bootleg no son "un álbum" en sentido estricto.
 
 ```
 Release   (la obra abstracta: título, tipo)
-  └── Edition   (una publicación CONCRETA: país, sello, edition_name, fecha, is_primary)
+  └── Edition   (una publicación CONCRETA: país, sello, edition_name, nº de catálogo, fecha,
+                 formato, créditos, notas, is_primary)
         └── Track   (la tracklist de ESA edición — puede variar entre ediciones)
 ```
 
@@ -260,6 +261,16 @@ Decisiones de diseño fijadas (para no repensarlas en cada fase futura):
   enum nativo ni un booleano sin restricción. Al marcar una edición como principal, el
   `service` (`_demote_other_primary_editions`) desmarca automáticamente la anterior *antes* de
   guardar: el admin nunca choca con el índice en el uso normal, solo actúa de red de seguridad.
+- **`Edition.format`** (`EditionFormat`, opcional): formato físico — `vinyl` / `cd` / `single`
+  / `maxi_single` / `cd_single` / `cassette`. Mismo patrón que `release_type`/`image_type`
+  (texto validado por Python + `CHECK`, no enum nativo). **Ojo al añadir un campo así**: si el
+  `service` construye el modelo con kwargs explícitos (como `create_edition`, a diferencia de
+  `update_edition` que usa `model_dump(exclude_unset=True)` + `setattr` genérico), hay que
+  acordarse de pasar el campo nuevo a mano — se nos olvidó una vez y quedó cubierto por un test.
+- **`Edition.catalog_number`/`credits`/`notes`** (todos opcionales): la referencia del sello
+  para esa edición concreta (`catalog_number`, acotado a 100 caracteres, como `label`) y dos
+  campos de texto libre sin límite de longitud (`Text`, no `String(n)`) para créditos
+  (músicos, producción...) y notas generales sobre la edición.
 - **Cada `Track` pertenece a una única `Edition`** (1:N, sin compartir temas entre ediciones ni
   publicaciones). Si el mismo tema aparece en dos ediciones o en un recopilatorio, hoy son filas
   independientes. El día que la deduplicación importe de verdad, se migra a una relación N:M.

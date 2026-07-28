@@ -233,10 +233,15 @@ Discos, recopilatorios, singles y bootlegs se catalogan en tres niveles:
 
 ```
 Release   (la obra: "Tubular Bells", con su tipo)
-  └── Edition   (una publicación concreta: país, sello, fecha, is_primary)
+  └── Edition   (país, sello, nº de catálogo, fecha, formato, créditos, notas, is_primary)
         ├── Track   (la tracklist de esa edición)
         └── Image   (portada, contraportada... de esa edición)
 ```
+
+`format` indica el soporte físico de la edición: `vinyl`, `cd`, `single`, `maxi_single`,
+`cd_single` o `cassette` (opcional). `credits` y `notes` son texto libre sin límite de
+longitud (músicos/producción y notas generales, respectivamente); todos los campos de
+`Edition` son opcionales.
 
 Un mismo disco puede tener varias ediciones (la original, una reedición remasterizada,
 una edición de otro país con otra portada y hasta otra *tracklist*). `is_primary` marca
