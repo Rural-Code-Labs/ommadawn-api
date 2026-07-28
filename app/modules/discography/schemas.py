@@ -9,7 +9,7 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.modules.discography.models import ImageType, ReleaseType
+from app.modules.discography.models import EditionFormat, ImageType, ReleaseType
 
 # --- Entrada (request) ---------------------------------------------------------
 
@@ -47,7 +47,13 @@ class EditionCreate(BaseModel):
     country: str | None = Field(default=None, max_length=100)
     label: str | None = Field(default=None, max_length=150)
     edition_name: str | None = Field(default=None, max_length=200)
+    catalog_number: str | None = Field(default=None, max_length=100)
     release_date: date | None = None
+    format: EditionFormat | None = None
+    # Sin max_length: texto libre (musicos, productor... / notas sobre la
+    # edicion), no hay un limite razonable que imponer de antemano.
+    credits: str | None = None
+    notes: str | None = None
     is_primary: bool = False
     tracks: list[TrackCreate] = Field(default_factory=list)
 
@@ -68,7 +74,11 @@ class EditionUpdate(BaseModel):
     country: str | None = None
     label: str | None = None
     edition_name: str | None = None
+    catalog_number: str | None = None
     release_date: date | None = None
+    format: EditionFormat | None = None
+    credits: str | None = None
+    notes: str | None = None
     is_primary: bool | None = None
     tracks: list[TrackCreate] | None = None
 
@@ -132,7 +142,11 @@ class EditionRead(BaseModel):
     country: str | None
     label: str | None
     edition_name: str | None
+    catalog_number: str | None
     release_date: date | None
+    format: EditionFormat | None
+    credits: str | None
+    notes: str | None
     is_primary: bool
     tracks: list[TrackRead]
     images: list[ImageRead]

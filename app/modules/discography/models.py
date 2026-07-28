@@ -26,6 +26,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    Text,
     UniqueConstraint,
     func,
     text,
@@ -49,6 +50,18 @@ class ReleaseType(str, enum.Enum):
     COMPILATION = "compilation"
     SINGLE = "single"
     BOOTLEG = "bootleg"
+
+
+class EditionFormat(str, enum.Enum):
+    """Formato fisico de una edicion. Mismo patron que ReleaseType/ImageType:
+    texto validado por Python + CHECK, ampliable sin tocar tipos nativos."""
+
+    VINYL = "vinyl"
+    CD = "cd"
+    SINGLE = "single"
+    MAXI_SINGLE = "maxi_single"
+    CD_SINGLE = "cd_single"
+    CASSETTE = "cassette"
 
 
 class Release(Base):
@@ -138,7 +151,27 @@ class Edition(Base):
     label: Mapped[str | None] = mapped_column(String(150), nullable=True)
     # Nombre descriptivo de la edicion, p. ej. "Reedicion remasterizada 2009".
     edition_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Referencia del sello para ESTA edicion, p. ej. "V2001" o "CDV 2002".
+    catalog_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
     release_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+    # `Text`, no `String(n)`: son campos de informacion libre (musicos,
+    # productor, ingeniero de sonido... / cualquier nota sobre la edicion), sin
+    # limite de longitud razonable que imponer de antemano.
+    credits: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Formato fisico (vinilo, CD, cassette...). Nullable: no siempre se conoce
+    # o no aplica (p. ej. una edicion solo digital).
+    format: Mapped[EditionFormat | None] = mapped_column(
+        Enum(
+            EditionFormat,
+            native_enum=False,
+            validate_strings=True,
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        nullable=True,
+    )
 
     # Marca la edicion "por defecto" a mostrar cuando un Release tiene varias
     # (p. ej. en una lista del catalogo, que portada ensenar).

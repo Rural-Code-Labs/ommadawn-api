@@ -33,7 +33,11 @@ UK_1973_EDITION = {
     "country": "Reino Unido",
     "label": "Virgin Records",
     "edition_name": "Edicion original",
+    "catalog_number": "V2001",
     "release_date": "1973-05-25",
+    "format": "vinyl",
+    "credits": "Mike Oldfield: todos los instrumentos. Producido por Tom Newman y Simon Heyworth.",
+    "notes": "Primer album de Mike Oldfield, grabado en The Manor Studio.",
     "is_primary": True,
     "tracks": [
         {"position": 1, "title": "Tubular Bells, Part One", "duration_seconds": 1548},
@@ -235,6 +239,10 @@ async def test_admin_can_create_edition_with_tracks(
     assert resp.status_code == 201
     body = resp.json()
     assert body["country"] == "Reino Unido"
+    assert body["format"] == "vinyl"
+    assert body["catalog_number"] == "V2001"
+    assert body["credits"] == UK_1973_EDITION["credits"]
+    assert body["notes"] == UK_1973_EDITION["notes"]
     assert body["is_primary"] is True
     assert [t["title"] for t in body["tracks"]] == [
         "Tubular Bells, Part One",
@@ -341,7 +349,53 @@ async def test_update_edition_only_touches_sent_fields(
     body = resp.json()
     assert body["label"] == "Virgin Records (reedicion)"
     assert body["country"] == "Reino Unido"  # no enviado, no se toca
+    assert body["format"] == "vinyl"  # tampoco se toca
     assert len(body["tracks"]) == 2  # tampoco se tocan
+
+
+async def test_update_edition_can_change_format(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    release_id = await _create_release(client, headers)
+    created = await client.post(
+        f"{BASE}/releases/{release_id}/editions", json=UK_1973_EDITION, headers=headers
+    )
+    edition_id = created.json()["id"]
+
+    resp = await client.patch(
+        f"{BASE}/releases/{release_id}/editions/{edition_id}",
+        json={"format": "cd"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["format"] == "cd"
+
+
+async def test_update_edition_can_change_catalog_number_credits_and_notes(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    release_id = await _create_release(client, headers)
+    created = await client.post(
+        f"{BASE}/releases/{release_id}/editions", json=UK_1973_EDITION, headers=headers
+    )
+    edition_id = created.json()["id"]
+
+    resp = await client.patch(
+        f"{BASE}/releases/{release_id}/editions/{edition_id}",
+        json={
+            "catalog_number": "CDV 2001",
+            "credits": "Remasterizado por ...",
+            "notes": "Reedicion en CD.",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["catalog_number"] == "CDV 2001"
+    assert body["credits"] == "Remasterizado por ..."
+    assert body["notes"] == "Reedicion en CD."
 
 
 async def test_update_edition_can_clear_a_nullable_field(

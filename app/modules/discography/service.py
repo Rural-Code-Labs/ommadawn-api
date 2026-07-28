@@ -163,7 +163,11 @@ async def create_edition(
         country=data.country,
         label=data.label,
         edition_name=data.edition_name,
+        catalog_number=data.catalog_number,
         release_date=data.release_date,
+        format=data.format,
+        credits=data.credits,
+        notes=data.notes,
         is_primary=data.is_primary,
         tracks=[
             Track(
