@@ -13,6 +13,8 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, EmailStr, Field
 
+from app.modules.auth.models import ThemePreference
+
 
 # --- Entrada (request) ---------------------------------------------------------
 
@@ -63,6 +65,13 @@ class UserUpdate(BaseModel):
     country: str | None = Field(default=None, max_length=100)
     city: str | None = Field(default=None, max_length=100)
     birth_date: date | None = None
+    # NO es `ThemePreference | None`: a diferencia de los campos de arriba,
+    # este no admite "borrarlo" (la columna en BD no es nullable). El truco
+    # para que siga siendo opcional en el PATCH: un valor por defecto (no
+    # None) hace que `exclude_unset` lo ignore si se omite, y que un `null`
+    # explicito en el body de 422 (Pydantic lo rechaza) en vez de romper en
+    # el commit con un IntegrityError.
+    theme_preference: ThemePreference = ThemePreference.SYSTEM
 
 
 class UserAdminUpdate(BaseModel):
@@ -94,6 +103,7 @@ class UserRead(BaseModel):
     city: str | None
     birth_date: date | None
     avatar_url: str | None
+    theme_preference: ThemePreference
     is_active: bool
     is_admin: bool
     is_super_admin: bool

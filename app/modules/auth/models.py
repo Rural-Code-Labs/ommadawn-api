@@ -6,12 +6,26 @@ restricciones). La logica (registrar, loguear, validar contrasenas) NO va aqui:
 ira en el `service`.
 """
 
+import enum
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, String, func
+from sqlalchemy import Boolean, Date, DateTime, Enum, ForeignKey, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
+
+
+class ThemePreference(str, enum.Enum):
+    """Preferencia de apariencia de la app (claro/oscuro/automatico).
+
+    Mismo patron que ReleaseType/ImageType/EditionFormat en discografia: texto
+    validado por Python + CHECK, no un enum nativo de PostgreSQL, para poder
+    ampliar valores sin `ALTER TYPE`.
+    """
+
+    LIGHT = "light"
+    DARK = "dark"
+    SYSTEM = "system"
 
 
 class User(Base):
@@ -51,6 +65,21 @@ class User(Base):
     # imagenes con distinto tipo), un usuario solo tiene UN avatar, asi que un
     # simple campo nullable basta; subir uno nuevo sustituye al anterior.
     avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    # Preferencia de tema (claro/oscuro/automatico). A diferencia de
+    # country/city/birth_date, NO es nullable: es un ajuste que siempre tiene
+    # un valor concreto (por defecto "system"), no un dato "desconocido"
+    # pendiente de rellenar. Editable via PATCH /auth/me.
+    theme_preference: Mapped[ThemePreference] = mapped_column(
+        Enum(
+            ThemePreference,
+            native_enum=False,
+            validate_strings=True,
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        default=ThemePreference.SYSTEM,
+        nullable=False,
+    )
 
     # Contrasena SIEMPRE hasheada (argon2), nunca en claro.
     # Nullable a proposito: un usuario que en el futuro entre solo con un

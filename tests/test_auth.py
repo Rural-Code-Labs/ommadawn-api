@@ -398,6 +398,35 @@ async def test_update_profile_can_clear_a_field_with_null(client: AsyncClient):
     assert resp.json()["country"] is None
 
 
+async def test_register_defaults_theme_preference_to_system(client: AsyncClient):
+    resp = await client.post(f"{BASE}/register", json=CREDS)
+    assert resp.status_code == 201
+    assert resp.json()["theme_preference"] == "system"
+
+
+async def test_update_profile_can_change_theme_preference(client: AsyncClient):
+    tokens = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    resp = await client.patch(
+        f"{BASE}/me", json={"theme_preference": "dark"}, headers=headers
+    )
+    assert resp.status_code == 200
+    assert resp.json()["theme_preference"] == "dark"
+
+
+async def test_update_profile_rejects_null_theme_preference(client: AsyncClient):
+    # theme_preference NO es nullable en BD: un null explicito debe dar 422,
+    # no reventar en el commit.
+    tokens = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    resp = await client.patch(
+        f"{BASE}/me", json={"theme_preference": None}, headers=headers
+    )
+    assert resp.status_code == 422
+
+
 async def test_update_profile_cannot_touch_admin_fields(client: AsyncClient):
     # UserUpdate no declara is_admin/is_super_admin/username/email: si se mandan,
     # Pydantic los ignora (no son campos del schema, no dan ni 422).
