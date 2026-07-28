@@ -197,10 +197,19 @@ no crea tablas al arrancar. Tras tocar un modelo: `alembic revision --autogenera
 Ampliación sobre el bloque de auth ya cerrado (Fases 1–4): editar el propio perfil, subir un
 avatar, y un rol de **superadministrador** que decide quién es `admin`.
 
-- **`PATCH /auth/me`** edita `full_name`, `country`, `city`, `birth_date` — un PATCH real
-  (`model_dump(exclude_unset=True)`, mismo patrón que `ReleaseUpdate`). Deliberadamente
-  **no** toca `username`, `email`, contraseña, avatar ni roles: cada uno tiene sus propias
-  reglas (unicidad, verificación, permisos) y se aborda aparte si hace falta.
+- **`PATCH /auth/me`** edita `full_name`, `country`, `city`, `birth_date`, `theme_preference`
+  — un PATCH real (`model_dump(exclude_unset=True)`, mismo patrón que `ReleaseUpdate`).
+  Deliberadamente **no** toca `username`, `email`, contraseña, avatar ni roles: cada uno tiene
+  sus propias reglas (unicidad, verificación, permisos) y se aborda aparte si hace falta.
+- **`theme_preference`** (`ThemePreference`: `light` / `dark` / `system`, por defecto
+  `system`): preferencia de apariencia de la app. Mismo patrón enum-como-texto que
+  `ReleaseType`/`ImageType`/`EditionFormat`, pero es el **primer campo así en `auth`**. A
+  diferencia de `country`/`city`/`birth_date`, la columna **no es nullable**: es un ajuste que
+  siempre tiene un valor concreto, no un dato "desconocido" por rellenar. Por eso en
+  `UserUpdate` NO es `ThemePreference | None`: tiene un valor por defecto (no `None`), lo que
+  permite que `exclude_unset` lo ignore si se omite en el `PATCH`, y que un `null` explícito
+  en el body dé **422** (Pydantic lo rechaza por tipo) en vez de reventar en el `commit` con
+  un `IntegrityError`.
 - **Avatar** (`POST`/`DELETE /auth/me/avatar`): reutiliza `StorageBackend` y
   `validate_image_upload` de discografía (ver más abajo el porqué de esa extracción). A
   diferencia de `Image` en discografía (varias imágenes por edición, con `image_type`), aquí
@@ -343,7 +352,7 @@ solo sirve de referencia de estilo) y se reparte en varias fases:
 | Fase | Contenido | Estado |
 |---|---|---|
 | **Fase 1 — Esqueleto / schema base** | Estructura del proyecto: `pyproject.toml`, `.env`, capa `core/` (config, base de datos, `Base` ORM) y app FastAPI que arranca con `/health`. | ✅ Hecha |
-| **Fase 2 — Modelo de usuario** | Model ORM `User` (tabla `users`): login por username o email (ambos únicos), `full_name` y `hashed_password` opcionales (preparado para OAuth futuro), `is_active`, `is_admin`, timestamps. Ampliado después con perfil editable (`country`, `city`, `birth_date`, avatar) y `is_super_admin` — ver "Perfil, avatar y roles" más abajo. | ✅ Hecha |
+| **Fase 2 — Modelo de usuario** | Model ORM `User` (tabla `users`): login por username o email (ambos únicos), `full_name` y `hashed_password` opcionales (preparado para OAuth futuro), `is_active`, `is_admin`, timestamps. Ampliado después con perfil editable (`country`, `city`, `birth_date`, avatar, `theme_preference`) y `is_super_admin` — ver "Perfil, avatar y roles" más abajo. | ✅ Hecha |
 | **Fase 3 — Flujo de tokens** | Access token + refresh token con rotación, hashing de contraseñas (argon2), seguridad JWT. | ✅ Hecha |
 | **Fase 4 — Endpoints de auth** | `register`, `login`, `refresh`, `logout`, `me` + tests de integración. Cierra el bloque de auth. | ✅ Hecha |
 | **Fase 5 — Discografía** | Discos (álbumes de estudio), recopilatorios, singles, bootlegs, directos… y sus temas/pistas. | 🚧 En marcha (modelo + endpoints de discos listos; falta poblar y añadir "directo") |
