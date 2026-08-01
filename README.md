@@ -23,8 +23,8 @@ es un ciudadano de primera clase: estable y bien versionado.
 | Pydantic v2 + pydantic-settings | Schemas de API y configuración vía `.env` |
 | argon2-cffi | Hashing de contraseñas (argon2id) |
 | PyJWT | Access / refresh tokens |
-| SQLite (aiosqlite) | Base de datos en **desarrollo** |
-| PostgreSQL (asyncpg) | Base de datos en **producción** |
+| PostgreSQL (asyncpg) | Base de datos en **desarrollo** (Docker) y **producción** |
+| SQLite (aiosqlite) | Alternativa rápida en local sin Docker |
 | pytest + pytest-asyncio + httpx | Tests de integración |
 
 Pasar de desarrollo a producción es **solo cambiar `DATABASE_URL`** en `.env`,
@@ -269,6 +269,39 @@ Leer el catálogo es **público**; crear, editar o borrar exige ser **administra
 se sirven desde disco local (`/media`, fuera de `/api/v1`); en producción será un bucket de
 Google Cloud Storage (pendiente), elegido por `STORAGE_BACKEND` en `.env` sin tocar código.
 Subir una `front_cover`/`back_cover` nueva **sustituye** la anterior; `other` se acumula.
+
+---
+
+## Entorno de preproducción
+
+La preproducción corre en una **Raspberry Pi** (Ubuntu 24.04) expuesta en internet:
+
+| | |
+|---|---|
+| **Dominio** | `https://api.pre.ommadawn.es` |
+| **Docs** | `https://api.pre.ommadawn.es/docs` · `/redoc` |
+| **Stack en Pi** | Gunicorn + UvicornWorker · PostgreSQL nativo · Caddy (TLS automático vía Let's Encrypt) |
+
+Todos los servicios corren como unidades systemd (`ommadawn-api`, `caddy`). El certificado TLS lo gestiona Caddy solo — se renueva automáticamente.
+
+### Desplegar cambios
+
+```bash
+./deploy/pre.sh
+```
+
+Hace en orden: `git pull` → instala dependencias nuevas → `alembic upgrade head` → reinicia el servicio.
+
+### Control del servicio desde el móvil
+
+Un bot de Telegram corre en la Pi (`ommadawn-bot` systemd). Solo responde al chat autorizado:
+
+| Comando | Acción |
+|---|---|
+| `/status` | Estado del servicio |
+| `/on` | Iniciar |
+| `/off` | Detener |
+| `/restart` | Reiniciar |
 
 ---
 

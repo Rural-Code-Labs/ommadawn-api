@@ -340,6 +340,32 @@ guarda los bytes**, solo la URL que devuelve el backend de almacenamiento al sub
 
 ---
 
+## Entorno de preproducción
+
+Raspberry Pi (Ubuntu 24.04) en la red local (`192.168.1.54`, hostname `adarga`), expuesta en
+internet bajo el dominio `api.pre.ommadawn.es` (CNAME → `ommadawn-api.ddns.net` vía No-IP).
+
+**Stack en la Pi:**
+- **Gunicorn** (2 workers, `UvicornWorker`) corriendo en `127.0.0.1:8000`, gestionado por
+  systemd (`ommadawn-api.service`). Arranque automático con la máquina.
+- **Caddy** como reverse proxy en los puertos 80/443, con TLS automático vía Let's Encrypt
+  (`ommadawn-bot.service`). Certificado de `api.pre.ommadawn.es` se renueva solo.
+- **PostgreSQL 16** nativo (no Docker). BD: `ommadawn_pre`, usuario: `ommadawn`.
+- **`.env`** en `/home/vattenbit/ommadawn-api/.env` — incluye `MEDIA_BASE_URL=https://api.pre.ommadawn.es/media`
+  (crítico: sin esto las URLs de imágenes apuntan a `localhost`).
+
+**Despliegue:** `./deploy/pre.sh` desde el Mac — hace `git pull` + `pip install` +
+`alembic upgrade head` + `systemctl restart ommadawn-api` vía SSH.
+
+**Acceso SSH:** clave en `~/.ssh/id_ed25519` (Mac → Pi sin contraseña).
+Deploy key del repo en la Pi: `~/.ssh/id_ed25519` (solo lectura en GitHub).
+
+**Bot de Telegram** (`ommadawn-bot.service`): controla el servicio desde el móvil.
+Script en `/home/vattenbit/ommadawn-bot.py`. Comandos: `/status`, `/on`, `/off`, `/restart`.
+Solo responde al chat ID autorizado — el token y el chat ID viven en el script (no en el repo).
+
+---
+
 ## Plan por fases
 
 El proyecto se construye por fases **pequeñas y entendibles**. Cada fase se cierra (y se
