@@ -11,8 +11,9 @@ de salida: jamas sale de la BD).
 
 from datetime import date, datetime
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
+from app.core.country_codes import validate_country_code
 from app.modules.auth.models import ThemePreference
 
 
@@ -62,8 +63,15 @@ class UserUpdate(BaseModel):
     """
 
     full_name: str | None = Field(default=None, max_length=120)
-    country: str | None = Field(default=None, max_length=100)
+    country: str | None = Field(
+        default=None, min_length=2, max_length=2, pattern="^[A-Z]{2}$"
+    )
     city: str | None = Field(default=None, max_length=100)
+
+    @field_validator("country", mode="before")
+    @classmethod
+    def _validate_country(cls, v: object) -> object:
+        return validate_country_code(v)  # type: ignore[arg-type]
     birth_date: date | None = None
     # NO es `ThemePreference | None`: a diferencia de los campos de arriba,
     # este no admite "borrarlo" (la columna en BD no es nullable). El truco

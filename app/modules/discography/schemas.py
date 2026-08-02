@@ -7,8 +7,9 @@ modelos: Release (la obra) -> Edition (una publicacion concreta) -> Track.
 
 from datetime import date, datetime
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.core.country_codes import validate_country_code
 from app.modules.discography.models import EditionFormat, ImageType, ReleaseType
 
 # --- Entrada (request) ---------------------------------------------------------
@@ -44,7 +45,9 @@ class EditionCreate(BaseModel):
     peticion, porque asi es como se cura el catalogo en la practica.
     """
 
-    country: str | None = Field(default=None, max_length=100)
+    country: str | None = Field(
+        default=None, min_length=2, max_length=2, pattern="^[A-Z]{2}$"
+    )
     label: str | None = Field(default=None, max_length=150)
     edition_name: str | None = Field(default=None, max_length=200)
     catalog_number: str | None = Field(default=None, max_length=100)
@@ -56,6 +59,11 @@ class EditionCreate(BaseModel):
     notes: str | None = None
     is_primary: bool = False
     tracks: list[TrackCreate] = Field(default_factory=list)
+
+    @field_validator("country", mode="before")
+    @classmethod
+    def _validate_country(cls, v: object) -> object:
+        return validate_country_code(v)  # type: ignore[arg-type]
 
     @model_validator(mode="after")
     def _check_positions(self) -> "EditionCreate":
@@ -71,7 +79,9 @@ class EditionUpdate(BaseModel):
     REEMPLAZA toda la tracklist existente.
     """
 
-    country: str | None = None
+    country: str | None = Field(
+        default=None, min_length=2, max_length=2, pattern="^[A-Z]{2}$"
+    )
     label: str | None = None
     edition_name: str | None = None
     catalog_number: str | None = None
@@ -81,6 +91,11 @@ class EditionUpdate(BaseModel):
     notes: str | None = None
     is_primary: bool | None = None
     tracks: list[TrackCreate] | None = None
+
+    @field_validator("country", mode="before")
+    @classmethod
+    def _validate_country(cls, v: object) -> object:
+        return validate_country_code(v)  # type: ignore[arg-type]
 
     @model_validator(mode="after")
     def _check_positions(self) -> "EditionUpdate":
