@@ -130,7 +130,8 @@ ommadawn-api/
 │   │   ├── security.py         # argon2 (hashing) + PyJWT + refresh tokens
 │   │   ├── exceptions.py       # HTTPExceptions reutilizables
 │   │   ├── openapi.py          # Post-proceso del openapi.json (opcionales aptos para iOS)
-│   │   └── storage.py          # StorageBackend (Local ahora; GCS pendiente)
+│   │   ├── storage.py          # StorageBackend (Local ahora; GCS pendiente)
+│   │   └── country_codes.py    # Lista ISO 3166-1 alpha-2 + validate_country_code (compartido)
 │   └── modules/
 │       ├── auth/               # ✅ Fases 2-4 (bloque cerrado)
 │       │   ├── models.py       # User, RefreshToken
@@ -197,7 +198,12 @@ no crea tablas al arrancar. Tras tocar un modelo: `alembic revision --autogenera
 Ampliación sobre el bloque de auth ya cerrado (Fases 1–4): editar el propio perfil, subir un
 avatar, y un rol de **superadministrador** que decide quién es `admin`.
 
-- **`PATCH /auth/me`** edita `full_name`, `country`, `city`, `birth_date`, `theme_preference`
+- **`PATCH /auth/me`** edita `full_name`, `country`, `city`, `birth_date`, `theme_preference`.
+  El campo `country` acepta **códigos ISO 3166-1 alpha-2** (ej. `"ES"`, `"GB"`, `"US"`):
+  `validate_country_code` (en `app/core/country_codes.py`) normaliza a mayúsculas, remapea
+  alias habituales (`"UK"` → `"GB"`, `"USA"` → `"US"`) y devuelve 422 si el código no existe.
+  El OpenAPI refleja el contrato con `minLength: 2`, `maxLength: 2` y `pattern: "^[A-Z]{2}$"`,
+  lo que permite que swift-openapi-generator genere el tipo correcto en el cliente iOS.
   — un PATCH real (`model_dump(exclude_unset=True)`, mismo patrón que `ReleaseUpdate`).
   Deliberadamente **no** toca `username`, `email`, contraseña, avatar ni roles: cada uno tiene
   sus propias reglas (unicidad, verificación, permisos) y se aborda aparte si hace falta.
@@ -276,6 +282,11 @@ Decisiones de diseño fijadas (para no repensarlas en cada fase futura):
   `service` construye el modelo con kwargs explícitos (como `create_edition`, a diferencia de
   `update_edition` que usa `model_dump(exclude_unset=True)` + `setattr` genérico), hay que
   acordarse de pasar el campo nuevo a mano — se nos olvidó una vez y quedó cubierto por un test.
+- **`Edition.country`** acepta **códigos ISO 3166-1 alpha-2** (ej. `"GB"`, `"JP"`), igual que
+  `User.country`. El validador vive en `app/core/country_codes.py` y es compartido por ambos
+  módulos. Normaliza a mayúsculas y remapea alias (`"UK"` → `"GB"`, `"USA"` → `"US"`); un
+  código desconocido devuelve 422. Los datos previos (nombres completos de país) se migraron
+  a NULL en la migración `cec3117a2e5d`.
 - **`Edition.catalog_number`/`credits`/`notes`** (todos opcionales): la referencia del sello
   para esa edición concreta (`catalog_number`, acotado a 100 caracteres, como `label`) y dos
   campos de texto libre sin límite de longitud (`Text`, no `String(n)`) para créditos

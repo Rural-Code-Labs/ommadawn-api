@@ -183,7 +183,7 @@ Se manejan **dos tokens con roles distintos**:
 | `POST` | `/api/v1/auth/refresh` | — | Rota el refresh token y emite un par nuevo |
 | `POST` | `/api/v1/auth/logout` | 🔒 | Revoca el refresh token (`204`) |
 | `GET` | `/api/v1/auth/me` | 🔒 | Devuelve el usuario autenticado |
-| `PATCH` | `/api/v1/auth/me` | 🔒 | Edita `full_name`, `country`, `city`, `birth_date`, `theme_preference` (solo los campos enviados) |
+| `PATCH` | `/api/v1/auth/me` | 🔒 | Edita `full_name`, `country` (ISO 3166-1 alpha-2), `city`, `birth_date`, `theme_preference` (solo los campos enviados) |
 | `POST` | `/api/v1/auth/me/avatar` | 🔒 | Sube (o sustituye) el avatar (`multipart/form-data`) |
 | `DELETE` | `/api/v1/auth/me/avatar` | 🔒 | Borra el avatar (idempotente) |
 | `GET` | `/api/v1/auth/users` | 🔒👑 | Lista todos los usuarios |
@@ -241,7 +241,9 @@ Release   (la obra: "Tubular Bells", con su tipo)
 `format` indica el soporte físico de la edición: `vinyl`, `cd`, `single`, `maxi_single`,
 `cd_single` o `cassette` (opcional). `credits` y `notes` son texto libre sin límite de
 longitud (músicos/producción y notas generales, respectivamente); todos los campos de
-`Edition` son opcionales.
+`Edition` son opcionales. El campo `country` acepta códigos **ISO 3166-1 alpha-2**
+(`"GB"`, `"JP"`, `"US"`…) — la API normaliza a mayúsculas y devuelve 422 si el código
+no existe.
 
 Un mismo disco puede tener varias ediciones (la original, una reedición remasterizada,
 una edición de otro país con otra portada y hasta otra *tracklist*). `is_primary` marca
