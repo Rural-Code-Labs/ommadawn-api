@@ -1,4 +1,4 @@
-"""Validacion de codigos de pais ISO 3166-1 alpha-2.
+"""Validacion de codigos de pais ISO 3166-1 alpha-2 + supranacionales de discografia.
 
 Compartido entre los modulos que tienen un campo `country` (auth, discography).
 El validador normaliza a mayusculas antes de comprobar, de modo que "es" y "ES"
@@ -29,7 +29,17 @@ ISO_3166_1_ALPHA2: frozenset[str] = frozenset({
     "VN", "VU", "WF", "WS", "XK", "YE", "YT", "ZA", "ZM", "ZW",
 })
 
-# Alias habituales que no son codigos ISO validos pero se encuentran en datos reales.
+# Codigos supranacionales usados habitualmente en discografia real (Discogs, MusicBrainz...).
+# No son ISO 3166-1 alpha-2 estrictos pero cumplen el patron de 2 letras mayusculas.
+_SUPRANATIONAL: frozenset[str] = frozenset({
+    "EU",  # Union Europea — muy frecuente en lanzamientos europeos
+    "XW",  # Worldwide — lanzamientos globales (convencion Discogs)
+})
+
+# Conjunto completo aceptado por el validador.
+VALID_COUNTRY_CODES: frozenset[str] = ISO_3166_1_ALPHA2 | _SUPRANATIONAL
+
+# Alias habituales que no son codigos validos pero se encuentran en datos reales.
 _ALIASES: dict[str, str] = {
     "UK": "GB",
     "USA": "US",
@@ -37,18 +47,18 @@ _ALIASES: dict[str, str] = {
 
 
 def validate_country_code(value: str | None) -> str | None:
-    """Normaliza y valida un codigo de pais ISO 3166-1 alpha-2.
+    """Normaliza y valida un codigo de pais.
 
     - None se devuelve tal cual (el campo es opcional).
     - El valor se convierte a mayusculas y se remapean alias conocidos.
-    - Si no esta en la lista ISO, lanza ValueError con mensaje claro.
+    - Si no esta en VALID_COUNTRY_CODES, lanza ValueError con mensaje claro.
     """
     if value is None:
         return None
     normalized = value.strip().upper()
     normalized = _ALIASES.get(normalized, normalized)
-    if normalized not in ISO_3166_1_ALPHA2:
+    if normalized not in VALID_COUNTRY_CODES:
         raise ValueError(
-            f"'{value}' no es un codigo ISO 3166-1 alpha-2 valido (ej. 'ES', 'GB', 'US')"
+            f"'{value}' no es un codigo de pais valido (ISO 3166-1 alpha-2, ej. 'ES', 'GB', 'EU')"
         )
     return normalized
