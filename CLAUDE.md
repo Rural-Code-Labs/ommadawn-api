@@ -312,6 +312,7 @@ Endpoints actuales:
 | `POST` / `PATCH` / `DELETE` | `/api/v1/discography/releases[/{id}]` | Admin |
 | `POST` / `PATCH` / `DELETE` | `/api/v1/discography/releases/{id}/editions[/{edition_id}]` | Admin |
 | `POST` / `DELETE` | `.../editions/{edition_id}/images[/{image_id}]` | Admin |
+| `PATCH` | `.../editions/{edition_id}/images/{image_id}/position` | Admin |
 
 **`PATCH` (en `Release` y en `Edition`) es un PATCH de verdad**: usa
 `model_dump(exclude_unset=True)` para distinguir un campo *omitido* (no se toca) de uno
@@ -324,8 +325,9 @@ SQLAlchemy puede emitir los `INSERT` antes que los `DELETE` de los viejos y choc
 
 ### Imágenes (portadas, contraportadas...) y almacenamiento
 
-`Image` cuelga de `Edition` (no de `Release`): la portada puede variar por edición. Solo guarda
-`image_type` (`front_cover` / `back_cover` / `other`) y la `url` — **la base de datos nunca
+`Image` cuelga de `Edition` (no de `Release`): la portada puede variar por edición. Guarda
+`image_type` (`front_cover` / `back_cover` / `other`), la `url` y un campo `position` (entero,
+no nulo) que determina el orden de visualización dentro de la edición — **la base de datos nunca
 guarda los bytes**, solo la URL que devuelve el backend de almacenamiento al subir el fichero.
 
 - **`app/core/storage.py`** define el puerto `StorageBackend` (`save`/`delete`), con
@@ -342,6 +344,11 @@ guarda los bytes**, solo la URL que devuelve el backend de almacenamiento al sub
   subir para "reemplazar". `other` sí se acumula (varias páginas de un librillo, fotos sueltas).
   No hay restricción `UNIQUE` en BD para esto — lo gestiona el `service`, igual que el *demote*
   de `is_primary`.
+- **`position`**: al subir una imagen nueva se le asigna `max(posiciones existentes) + 1`; al
+  reemplazar una `front_cover`/`back_cover`, la nueva hereda la posición de la sustituida (no
+  salta al final). El endpoint `PATCH .../images/{id}/position` mueve la imagen un puesto arriba
+  o abajo intercambiando posición con la adyacente; devuelve la lista completa reordenada. Sin
+  restricción `UNIQUE` en BD (complicaría el swap): el `service` gestiona el orden.
 - Subida vía `multipart/form-data` (`UploadFile` + `Form`), primera vez que la API usa este
   patrón (requiere la dependencia `python-multipart`). Content-type restringido a
   JPEG/PNG/WEBP (422 si no) y tamaño máximo 10 MB (413 si se supera).

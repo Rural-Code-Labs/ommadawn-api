@@ -262,6 +262,7 @@ Leer el catálogo es **público**; crear, editar o borrar exige ser **administra
 | `POST` | `/api/v1/discography/releases/{id}/editions` | 🔒👑 | Añade una edición (con su tracklist) a una obra |
 | `PATCH` / `DELETE` | `/api/v1/discography/releases/{id}/editions/{edition_id}` | 🔒👑 | Edita o borra una edición |
 | `POST` | `.../editions/{edition_id}/images` | 🔒👑 | Sube una imagen (`multipart/form-data`: `image_type` + `file`) |
+| `PATCH` | `.../editions/{edition_id}/images/{image_id}/position` | 🔒👑 | Mueve la imagen arriba o abajo (`{"direction": "up"\|"down"}`); devuelve la lista completa reordenada |
 | `DELETE` | `.../editions/{edition_id}/images/{image_id}` | 🔒👑 | Borra una imagen |
 
 🔒👑 = requiere `Authorization: Bearer <access token>` de un usuario **administrador**
@@ -271,6 +272,9 @@ Leer el catálogo es **público**; crear, editar o borrar exige ser **administra
 se sirven desde disco local (`/media`, fuera de `/api/v1`); en producción será un bucket de
 Google Cloud Storage (pendiente), elegido por `STORAGE_BACKEND` en `.env` sin tocar código.
 Subir una `front_cover`/`back_cover` nueva **sustituye** la anterior; `other` se acumula.
+Cada imagen tiene un campo `position` (asignado automáticamente como max+1 al subir) que
+determina el orden de visualización dentro de la edición; se puede reordenar con flechas
+arriba/abajo usando el endpoint de posición.
 
 ---
 
