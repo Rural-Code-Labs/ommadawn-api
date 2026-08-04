@@ -360,7 +360,7 @@ async def test_register_cannot_inject_admin_roles(client: AsyncClient):
 
 
 async def test_update_profile_requires_authentication(client: AsyncClient):
-    resp = await client.patch(f"{BASE}/me", json={"country": "España"})
+    resp = await client.patch(f"{BASE}/me", json={"country": "ES"})
     assert resp.status_code == 401
 
 
@@ -368,10 +368,10 @@ async def test_update_profile_only_touches_sent_fields(client: AsyncClient):
     tokens = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {tokens['access_token']}"}
 
-    resp = await client.patch(f"{BASE}/me", json={"country": "España"}, headers=headers)
+    resp = await client.patch(f"{BASE}/me", json={"country": "ES"}, headers=headers)
     assert resp.status_code == 200
     body = resp.json()
-    assert body["country"] == "España"
+    assert body["country"] == "ES"
     # No enviado: sigue como se registro.
     assert body["full_name"] == CREDS["full_name"]
     assert body["city"] is None
@@ -391,7 +391,7 @@ async def test_update_profile_sets_birth_date(client: AsyncClient):
 async def test_update_profile_can_clear_a_field_with_null(client: AsyncClient):
     tokens = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {tokens['access_token']}"}
-    await client.patch(f"{BASE}/me", json={"country": "España"}, headers=headers)
+    await client.patch(f"{BASE}/me", json={"country": "ES"}, headers=headers)
 
     resp = await client.patch(f"{BASE}/me", json={"country": None}, headers=headers)
     assert resp.status_code == 200

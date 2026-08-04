@@ -6,6 +6,7 @@ modelos: Release (la obra) -> Edition (una publicacion concreta) -> Track.
 """
 
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -146,8 +147,15 @@ class ImageRead(BaseModel):
     id: int
     image_type: ImageType
     url: str
+    position: int
 
     model_config = {"from_attributes": True}
+
+
+class ImageMoveRequest(BaseModel):
+    """Body de PATCH .../images/{id}/position: mueve la imagen un puesto arriba o abajo."""
+
+    direction: Literal["up", "down"]
 
 
 class EditionRead(BaseModel):

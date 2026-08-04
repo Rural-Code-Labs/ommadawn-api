@@ -238,26 +238,83 @@ async def upload_image(
     `front_cover`/`back_cover` SUSTITUYEN la anterior de su mismo tipo (se borra
     la fila y el fichero viejo): asi el admin no acumula portadas sueltas, basta
     con volver a subir para "reemplazar". `other` se acumula sin limite.
+
+    La posicion se asigna automaticamente:
+    - Imagen nueva: max(posiciones existentes) + 1.
+    - Reemplazo de front_cover/back_cover: hereda la posicion de la imagen
+      sustituida, para que no salte al final de la lista.
     """
     edition = await _get_edition(session, release_id, edition_id)
 
     extension = validate_image_upload(content, content_type)
 
+    inherited_position: int | None = None
     if image_type != ImageType.OTHER:
         previous = [img for img in edition.images if img.image_type == image_type]
         for old_image in previous:
+            inherited_position = old_image.position
             await storage.delete(old_image.url)
             await session.delete(old_image)
         if previous:
             await session.flush()
 
+    if inherited_position is not None:
+        position = inherited_position
+    elif edition.images:
+        position = max(img.position for img in edition.images) + 1
+    else:
+        position = 1
+
     url = await storage.save(filename=f"{uuid4().hex}{extension}", content=content)
 
-    image = Image(edition_id=edition_id, image_type=image_type, url=url)
+    image = Image(edition_id=edition_id, image_type=image_type, url=url, position=position)
     session.add(image)
     await session.commit()
     await session.refresh(image)
     return image
+
+
+async def move_image(
+    session: AsyncSession,
+    release_id: int,
+    edition_id: int,
+    image_id: int,
+    direction: str,
+) -> list[Image]:
+    """Mueve una imagen un puesto arriba o abajo dentro de su edicion.
+
+    Intercambia la posicion con la imagen adyacente (ordenadas por position).
+    Devuelve la lista completa de imagenes de la edicion en el nuevo orden.
+    Lanza 400 si la imagen ya esta en el extremo correspondiente.
+    """
+    edition = await _get_edition(session, release_id, edition_id)
+    sorted_images = sorted(edition.images, key=lambda img: img.position)
+
+    image = next((img for img in sorted_images if img.id == image_id), None)
+    if image is None:
+        raise image_not_found_exception
+
+    idx = sorted_images.index(image)
+
+    if direction == "up":
+        if idx == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="La imagen ya esta en la primera posicion",
+            )
+        neighbor = sorted_images[idx - 1]
+    else:
+        if idx == len(sorted_images) - 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="La imagen ya esta en la ultima posicion",
+            )
+        neighbor = sorted_images[idx + 1]
+
+    image.position, neighbor.position = neighbor.position, image.position
+    await session.commit()
+    await session.refresh(edition, attribute_names=["images"])
+    return sorted(edition.images, key=lambda img: img.position)
 
 
 async def delete_image(

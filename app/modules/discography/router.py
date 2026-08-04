@@ -25,6 +25,7 @@ from app.modules.discography.schemas import (
     EditionCreate,
     EditionRead,
     EditionUpdate,
+    ImageMoveRequest,
     ImageRead,
     ReleaseCreate,
     ReleaseRead,
@@ -257,6 +258,35 @@ async def upload_image(
         content,
         file.content_type or "",
     )
+
+
+_ALREADY_AT_EDGE = {
+    "model": ErrorMessage,
+    "description": "La imagen ya esta en el extremo (primera o ultima posicion)",
+}
+
+
+@router.patch(
+    "/releases/{release_id}/editions/{edition_id}/images/{image_id}/position",
+    response_model=list[ImageRead],
+    summary="Mover una imagen arriba o abajo (requiere administrador)",
+    responses={
+        status.HTTP_400_BAD_REQUEST: _ALREADY_AT_EDGE,
+        status.HTTP_401_UNAUTHORIZED: _NO_AUTH,
+        status.HTTP_403_FORBIDDEN: _FORBIDDEN,
+        status.HTTP_404_NOT_FOUND: _IMAGE_NOT_FOUND,
+    },
+)
+async def move_image(
+    release_id: int,
+    edition_id: int,
+    image_id: int,
+    data: ImageMoveRequest,
+    session: AsyncSession = Depends(get_session),
+    _admin: User = Depends(require_admin),
+) -> list[Image]:
+    """Mueve la imagen un puesto arriba o abajo. Devuelve la lista completa de imagenes en el nuevo orden."""
+    return await service.move_image(session, release_id, edition_id, image_id, data.direction)
 
 
 @router.delete(

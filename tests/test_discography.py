@@ -30,7 +30,7 @@ FAN_CREDS = {
 TUBULAR_BELLS = {"title": "Tubular Bells", "release_type": "studio"}
 
 UK_1973_EDITION = {
-    "country": "Reino Unido",
+    "country": "GB",
     "label": "Virgin Records",
     "edition_name": "Edicion original",
     "catalog_number": "V2001",
@@ -238,7 +238,7 @@ async def test_admin_can_create_edition_with_tracks(
     )
     assert resp.status_code == 201
     body = resp.json()
-    assert body["country"] == "Reino Unido"
+    assert body["country"] == "GB"
     assert body["format"] == "vinyl"
     assert body["catalog_number"] == "V2001"
     assert body["credits"] == UK_1973_EDITION["credits"]
@@ -252,7 +252,7 @@ async def test_admin_can_create_edition_with_tracks(
     # Y aparece anidada al leer la obra completa.
     release = (await client.get(f"{BASE}/releases/{release_id}")).json()
     assert len(release["editions"]) == 1
-    assert release["editions"][0]["country"] == "Reino Unido"
+    assert release["editions"][0]["country"] == "GB"
 
 
 async def test_create_edition_on_unknown_release_returns_404(
@@ -290,7 +290,7 @@ async def test_edition_without_tracks_is_allowed(
 
     resp = await client.post(
         f"{BASE}/releases/{release_id}/editions",
-        json={"country": "Japon", "tracks": []},
+        json={"country": "JP", "tracks": []},
         headers=headers,
     )
     assert resp.status_code == 201
@@ -313,7 +313,7 @@ async def test_marking_a_new_edition_primary_demotes_the_previous_one(
 
     second = await client.post(
         f"{BASE}/releases/{release_id}/editions",
-        json={**UK_1973_EDITION, "country": "Japon", "is_primary": True, "tracks": []},
+        json={**UK_1973_EDITION, "country": "JP", "is_primary": True, "tracks": []},
         headers=headers,
     )
     assert second.status_code == 201
@@ -324,7 +324,7 @@ async def test_marking_a_new_edition_primary_demotes_the_previous_one(
     release = (await client.get(f"{BASE}/releases/{release_id}")).json()
     primaries = [e for e in release["editions"] if e["is_primary"]]
     assert len(primaries) == 1
-    assert primaries[0]["country"] == "Japon"
+    assert primaries[0]["country"] == "JP"
 
 
 # --- Edition: edicion (PATCH) ------------------------------------------------------
@@ -348,7 +348,7 @@ async def test_update_edition_only_touches_sent_fields(
     assert resp.status_code == 200
     body = resp.json()
     assert body["label"] == "Virgin Records (reedicion)"
-    assert body["country"] == "Reino Unido"  # no enviado, no se toca
+    assert body["country"] == "GB"  # no enviado, no se toca
     assert body["format"] == "vinyl"  # tampoco se toca
     assert len(body["tracks"]) == 2  # tampoco se tocan
 
@@ -687,3 +687,118 @@ async def test_admin_can_delete_image(client: AsyncClient, db_session: AsyncSess
 
     release = (await client.get(f"{BASE}/releases/{release_id}")).json()
     assert release["editions"][0]["images"] == []
+
+
+async def _upload_image(
+    client: AsyncClient, release_id: int, edition_id: int, headers: dict
+) -> int:
+    """Helper: sube una imagen 'other' minima y devuelve su id."""
+    tiny_png = (
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+        b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00"
+        b"\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05\x18"
+        b"\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+    resp = await client.post(
+        f"{BASE}/releases/{release_id}/editions/{edition_id}/images",
+        files={"file": ("img.png", tiny_png, "image/png")},
+        data={"image_type": "other"},
+        headers=headers,
+    )
+    assert resp.status_code == 201
+    return resp.json()["id"]
+
+
+async def test_new_images_get_consecutive_positions(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    release_id, edition_id = await _create_release_and_edition(client, headers)
+
+    id1 = await _upload_image(client, release_id, edition_id, headers)
+    id2 = await _upload_image(client, release_id, edition_id, headers)
+    id3 = await _upload_image(client, release_id, edition_id, headers)
+
+    release = (await client.get(f"{BASE}/releases/{release_id}")).json()
+    images = release["editions"][0]["images"]
+    assert [img["id"] for img in images] == [id1, id2, id3]
+    assert [img["position"] for img in images] == [1, 2, 3]
+
+
+async def test_move_image_up(client: AsyncClient, db_session: AsyncSession):
+    headers = await _admin_headers(client, db_session)
+    release_id, edition_id = await _create_release_and_edition(client, headers)
+
+    id1 = await _upload_image(client, release_id, edition_id, headers)
+    id2 = await _upload_image(client, release_id, edition_id, headers)
+
+    resp = await client.patch(
+        f"{BASE}/releases/{release_id}/editions/{edition_id}/images/{id2}/position",
+        json={"direction": "up"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    images = resp.json()
+    # id2 ahora es la primera
+    assert images[0]["id"] == id2
+    assert images[1]["id"] == id1
+
+
+async def test_move_image_down(client: AsyncClient, db_session: AsyncSession):
+    headers = await _admin_headers(client, db_session)
+    release_id, edition_id = await _create_release_and_edition(client, headers)
+
+    id1 = await _upload_image(client, release_id, edition_id, headers)
+    id2 = await _upload_image(client, release_id, edition_id, headers)
+
+    resp = await client.patch(
+        f"{BASE}/releases/{release_id}/editions/{edition_id}/images/{id1}/position",
+        json={"direction": "down"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    images = resp.json()
+    assert images[0]["id"] == id2
+    assert images[1]["id"] == id1
+
+
+async def test_move_image_at_first_position_returns_400(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    release_id, edition_id = await _create_release_and_edition(client, headers)
+    image_id = await _upload_image(client, release_id, edition_id, headers)
+
+    resp = await client.patch(
+        f"{BASE}/releases/{release_id}/editions/{edition_id}/images/{image_id}/position",
+        json={"direction": "up"},
+        headers=headers,
+    )
+    assert resp.status_code == 400
+
+
+async def test_move_image_at_last_position_returns_400(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    release_id, edition_id = await _create_release_and_edition(client, headers)
+    image_id = await _upload_image(client, release_id, edition_id, headers)
+
+    resp = await client.patch(
+        f"{BASE}/releases/{release_id}/editions/{edition_id}/images/{image_id}/position",
+        json={"direction": "down"},
+        headers=headers,
+    )
+    assert resp.status_code == 400
+
+
+async def test_move_image_requires_admin(client: AsyncClient, db_session: AsyncSession):
+    headers = await _admin_headers(client, db_session)
+    release_id, edition_id = await _create_release_and_edition(client, headers)
+    image_id = await _upload_image(client, release_id, edition_id, headers)
+
+    resp = await client.patch(
+        f"{BASE}/releases/{release_id}/editions/{edition_id}/images/{image_id}/position",
+        json={"direction": "up"},
+    )
+    assert resp.status_code == 401

@@ -196,7 +196,7 @@ class Edition(Base):
     images: Mapped[list["Image"]] = relationship(
         back_populates="edition",
         cascade="all, delete-orphan",
-        order_by="Image.image_type",
+        order_by="Image.position",
     )
 
     def __repr__(self) -> str:
@@ -283,6 +283,12 @@ class Image(Base):
     )
 
     url: Mapped[str] = mapped_column(String(500), nullable=False)
+
+    # Orden de visualizacion dentro de la edicion. Se asigna automaticamente al
+    # subir (max existente + 1) y se puede reordenar con el endpoint de posicion.
+    # Sin restriccion UNIQUE: el servicio gestiona el orden; la unicidad aqui
+    # complicaria el swap de dos imagenes sin aportar integridad real.
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
