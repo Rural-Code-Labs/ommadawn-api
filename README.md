@@ -238,6 +238,10 @@ Release   (la obra: "Tubular Bells", con su tipo)
         └── Image   (portada, contraportada... de esa edición)
 ```
 
+`Release` tiene un campo `description` (texto libre, sin límite de longitud) para la
+historia e información de la obra — contexto de grabación, curiosidades, relevancia…
+Es opcional y pertenece a la obra abstracta, no a una edición concreta.
+
 `format` indica el soporte físico de la edición: `vinyl`, `cd`, `single`, `maxi_single`,
 `cd_single` o `cassette` (opcional). `credits` y `notes` son texto libre sin límite de
 longitud (músicos/producción y notas generales, respectivamente); todos los campos de

@@ -263,6 +263,11 @@ imágenes de portada) no pueden vivir en la obra abstracta: varían por edición
 
 Decisiones de diseño fijadas (para no repensarlas en cada fase futura):
 
+- **`Release.description`** (opcional, `Text`, nullable): texto libre para la historia e
+  información de la obra — contexto de grabación, curiosidades, relevancia… A diferencia de
+  `Edition.credits`/`notes` (que son por publicación concreta), este texto describe la obra
+  abstracta y no varía entre ediciones. Se crea/edita junto al resto de campos del `Release`
+  vía `POST`/`PATCH /releases`.
 - **Una tabla `releases` con `release_type`, no una tabla por tipo.** `studio` /
   `compilation` / `single` / `bootleg`, en vez de herencia con JOIN. Se añadirá una tabla de
   detalle solo si un tipo necesita de verdad un campo exclusivo — hoy no hay ninguno conocido.
