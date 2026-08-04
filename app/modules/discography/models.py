@@ -78,6 +78,10 @@ class Release(Base):
 
     title: Mapped[str] = mapped_column(String(200), nullable=False)
 
+    # Texto libre: historia, contexto y curiosidades de la obra. Text (sin
+    # limite de longitud) porque puede ser tan largo como haga falta.
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     # `native_enum=False` -> se guarda como String + CHECK, no como tipo nativo
     # de Postgres. Ver el porque en el docstring de ReleaseType.
     # `values_callable` -> que la columna guarde el VALOR ("studio") y no el

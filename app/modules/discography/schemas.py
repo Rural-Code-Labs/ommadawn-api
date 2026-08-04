@@ -107,12 +107,13 @@ class EditionUpdate(BaseModel):
 class ReleaseCreate(BaseModel):
     """Datos para anadir una obra al catalogo (body de POST /releases).
 
-    Solo el titulo y el tipo: una obra puede existir en el catalogo sin
-    ediciones todavia (se anaden despues via POST /releases/{id}/editions).
+    Solo el titulo, el tipo y la descripcion opcional: una obra puede existir en
+    el catalogo sin ediciones todavia (se anaden despues via POST /releases/{id}/editions).
     """
 
     title: str = Field(min_length=1, max_length=200)
     release_type: ReleaseType
+    description: str | None = None
 
 
 class ReleaseUpdate(BaseModel):
@@ -120,6 +121,7 @@ class ReleaseUpdate(BaseModel):
 
     title: str | None = Field(default=None, min_length=1, max_length=200)
     release_type: ReleaseType | None = None
+    description: str | None = None
 
 
 # --- Salida (response) ---------------------------------------------------------
@@ -183,6 +185,7 @@ class ReleaseRead(BaseModel):
     id: int
     title: str
     release_type: ReleaseType
+    description: str | None
     created_at: datetime
     editions: list[EditionRead]
 

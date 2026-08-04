@@ -80,7 +80,7 @@ async def get_release(session: AsyncSession, release_id: int) -> Release:
 
 async def create_release(session: AsyncSession, data: ReleaseCreate) -> Release:
     """Crea una obra (sin ediciones todavia; se anaden con create_edition)."""
-    release = Release(title=data.title, release_type=data.release_type)
+    release = Release(title=data.title, release_type=data.release_type, description=data.description)
     session.add(release)
     await session.commit()
     await session.refresh(release, attribute_names=["editions"])
