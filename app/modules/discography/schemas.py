@@ -135,6 +135,14 @@ class EditionUpdate(BaseModel):
         return self
 
 
+class RecordingUpdate(BaseModel):
+    """Datos para editar una grabacion (body de PATCH /recordings/{id}). PATCH parcial."""
+
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    duration_seconds: int | None = Field(default=None, gt=0)
+    credits: str | None = None
+
+
 class ReleaseCreate(BaseModel):
     """Datos para anadir una obra al catalogo (body de POST /releases).
 

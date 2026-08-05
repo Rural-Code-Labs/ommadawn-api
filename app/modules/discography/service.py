@@ -262,6 +262,20 @@ async def delete_edition(session: AsyncSession, release_id: int, edition_id: int
 # --- Recording (grabacion real de un tema, compartible entre ediciones) ----------
 
 
+async def update_recording(
+    session: AsyncSession, recording_id: int, data: "RecordingUpdate"
+) -> Recording:
+    """Edita una grabacion. Solo toca los campos presentes en el body (PATCH real)."""
+    recording = await session.get(Recording, recording_id)
+    if recording is None:
+        raise recording_not_found_exception
+    for field, value in data.model_dump(exclude_unset=True).items():
+        setattr(recording, field, value)
+    await session.commit()
+    await session.refresh(recording)
+    return recording
+
+
 async def search_recordings(session: AsyncSession, q: str) -> list[Recording]:
     """Busca grabaciones por titulo (busqueda parcial, insensible a mayusculas).
 

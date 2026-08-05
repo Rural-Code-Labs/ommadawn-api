@@ -28,6 +28,7 @@ from app.modules.discography.schemas import (
     ImageMoveRequest,
     ImageRead,
     RecordingRead,
+    RecordingUpdate,
     ReleaseCreate,
     ReleaseRead,
     ReleaseUpdate,
@@ -81,6 +82,26 @@ async def search_recordings(
     al curar otra edicion que incluya el mismo tema.
     """
     return await service.search_recordings(session, q)
+
+
+@router.patch(
+    "/recordings/{recording_id}",
+    response_model=RecordingRead,
+    summary="Editar una grabacion (requiere administrador)",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: _NO_AUTH,
+        status.HTTP_403_FORBIDDEN: _FORBIDDEN,
+        status.HTTP_404_NOT_FOUND: {"model": ErrorMessage, "description": "La grabacion no existe"},
+    },
+)
+async def update_recording(
+    recording_id: int,
+    data: RecordingUpdate,
+    session: AsyncSession = Depends(get_session),
+    _admin: User = Depends(require_admin),
+) -> Recording:
+    """Edita los campos presentes en el body (titulo, duracion y/o creditos)."""
+    return await service.update_recording(session, recording_id, data)
 
 
 # --- Release (la obra) ------------------------------------------------------------
