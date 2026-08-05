@@ -20,13 +20,14 @@ from app.core.storage import StorageBackend, get_storage_backend
 from app.modules.auth.dependencies import require_admin
 from app.modules.auth.models import User
 from app.modules.discography import service
-from app.modules.discography.models import Edition, Image, ImageType, Release, ReleaseType
+from app.modules.discography.models import Edition, Image, ImageType, Recording, Release, ReleaseType
 from app.modules.discography.schemas import (
     EditionCreate,
     EditionRead,
     EditionUpdate,
     ImageMoveRequest,
     ImageRead,
+    RecordingRead,
     ReleaseCreate,
     ReleaseRead,
     ReleaseUpdate,
@@ -60,6 +61,26 @@ _IMAGE_TOO_LARGE = {
     "model": ErrorMessage,
     "description": "La imagen supera el tamano maximo permitido (10 MB)",
 }
+
+
+# --- Recording (busqueda de grabaciones para reutilizar) -------------------------
+
+
+@router.get(
+    "/recordings",
+    response_model=list[RecordingRead],
+    summary="Buscar grabaciones por titulo",
+)
+async def search_recordings(
+    q: str = Query(min_length=1, description="Texto a buscar en el titulo de la grabacion"),
+    session: AsyncSession = Depends(get_session),
+) -> list[Recording]:
+    """Devuelve las grabaciones cuyo titulo contiene `q` (insensible a mayusculas).
+
+    Util para obtener el `recording_id` de una grabacion antes de reutilizarla
+    al curar otra edicion que incluya el mismo tema.
+    """
+    return await service.search_recordings(session, q)
 
 
 # --- Release (la obra) ------------------------------------------------------------

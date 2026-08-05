@@ -1,17 +1,15 @@
 """Modelos ORM del modulo de discografia.
 
-Tres niveles, de lo abstracto a lo concreto:
+  Release   (la OBRA abstracta: "Tubular Bells", tipo: studio/live/bootleg...)
+    -> Edition  (publicacion CONCRETA: pais, sello, fecha, formato, portada...)
+         -> Track  (aparicion de una grabacion en ESA edicion: posicion, disco, cara)
+              -> Recording  (la grabacion real: titulo, duracion, creditos --
+                             COMPARTIDA entre ediciones que incluyan el mismo tema)
 
-  Release (la OBRA: "Tubular Bells", con su tipo: disco, recopilatorio,
-           single o bootleg)
-    -> Edition (una publicacion CONCRETA de esa obra: pais, sello, fecha y
-                portada propios -- la original UK de 1973, la reedicion
-                remasterizada de 2009...)
-      -> Track (la tracklist de ESA edicion; puede variar entre ediciones:
-                bonus tracks, ediciones remasterizadas...)
-
-Se usa `Release` (no `Album`) porque un single o un bootleg no son "un album"
-en sentido estricto, pero si son una obra con sus propias ediciones.
+La separacion Track/Recording permite que "Tubular Bells Part One" de la edicion
+original UK y la misma pista en Boxed compartan una unica fila en `recordings`
+(y sus creditos se escriban solo una vez), mientras que cada `Track` guarda los
+datos que si varian por edicion: posicion, numero de disco y cara.
 """
 
 import enum
@@ -27,7 +25,6 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
-    UniqueConstraint,
     func,
     text,
 )
@@ -211,18 +208,73 @@ class Edition(Base):
         )
 
 
-class Track(Base):
-    """Tabla `tracks`: un tema dentro de una edicion concreta.
+class Recording(Base):
+    """Tabla `recordings`: la grabacion real de un tema.
 
-    Cada Track pertenece a UNA sola edicion (1:N, sin compartir temas entre
-    ediciones ni publicaciones). Si el mismo tema aparece en dos ediciones (o en
-    un recopilatorio), hoy son filas independientes: simplificacion deliberada.
+    Representa "la toma concreta": titulo, duracion y creditos. Se separa de
+    `Track` para poder compartir la misma grabacion entre varias ediciones
+    (p. ej. "Tubular Bells Part One" de la edicion original y la misma pista
+    en un recopilatorio como Boxed). Asi los creditos se escriben UNA sola vez.
+
+    Una `Recording` sin creditos es perfectamente valida: no siempre se conocen.
+    """
+
+    __tablename__ = "recordings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+
+    # Nullable: no siempre se conoce la duracion exacta (p. ej. bootlegs).
+    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Texto libre: instrumentistas, productor, ingeniero de sonido...
+    credits: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    tracks: Mapped[list["Track"]] = relationship(back_populates="recording")
+
+    def __repr__(self) -> str:
+        return f"<Recording id={self.id} title={self.title!r}>"
+
+
+class Track(Base):
+    """Tabla `tracks`: la aparicion de una Recording en una Edition concreta.
+
+    Guarda los datos que SI varian por edicion: posicion, disco y cara. El
+    titulo, duracion y creditos viven en `Recording` y se comparten entre
+    todas las ediciones que incluyen esa grabacion.
+
+    `disc_number` + `side` permiten agrupar las pistas:
+      - CDs: disc_number=1/2/3, side=None
+      - Vinilos: disc_number=1/2, side="A"/"B"
+
+    La unicidad de posicion se garantiza con dos indices parciales:
+      - Cuando side IS NULL: UNIQUE(edition_id, disc_number, position)
+      - Cuando side IS NOT NULL: UNIQUE(edition_id, disc_number, side, position)
+    Se usan dos indices porque PostgreSQL trata NULL != NULL en restricciones
+    UNIQUE, lo que dejaria pasar duplicados cuando side es NULL.
     """
 
     __tablename__ = "tracks"
     __table_args__ = (
-        # Dos temas de la MISMA edicion no pueden tener el mismo numero.
-        UniqueConstraint("edition_id", "position", name="uq_tracks_edition_position"),
+        Index(
+            "uq_tracks_edition_disc_null_side_pos",
+            "edition_id", "disc_number", "position",
+            unique=True,
+            postgresql_where=text("side IS NULL"),
+            sqlite_where=text("side IS NULL"),
+        ),
+        Index(
+            "uq_tracks_edition_disc_side_pos",
+            "edition_id", "disc_number", "side", "position",
+            unique=True,
+            postgresql_where=text("side IS NOT NULL"),
+            sqlite_where=text("side IS NOT NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -230,21 +282,38 @@ class Track(Base):
     edition_id: Mapped[int] = mapped_column(
         ForeignKey("editions.id", ondelete="CASCADE"), index=True, nullable=False
     )
+    recording_id: Mapped[int] = mapped_column(
+        ForeignKey("recordings.id", ondelete="RESTRICT"), index=True, nullable=False
+    )
 
-    # Numero de pista dentro de la edicion (1, 2, 3...). Determina el orden.
+    # Numero de pista dentro de este disco/cara (1, 2, 3...).
     position: Mapped[int] = mapped_column(Integer, nullable=False)
-
-    title: Mapped[str] = mapped_column(String(200), nullable=False)
-
-    # Nullable: no siempre se conoce la duracion exacta (p. ej. bootlegs).
-    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Numero de disco dentro de la edicion. Por defecto 1 (la mayoria de albums).
+    disc_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # Cara del disco (solo en vinilos: "A", "B"). None para CDs y digitales.
+    side: Mapped[str | None] = mapped_column(String(10), nullable=True)
 
     edition: Mapped["Edition"] = relationship(back_populates="tracks")
+    recording: Mapped["Recording"] = relationship(back_populates="tracks")
+
+    # Propiedades que "aplanan" Recording hacia Track para que TrackRead
+    # funcione con from_attributes=True sin necesitar un schema anidado.
+    @property
+    def title(self) -> str:
+        return self.recording.title
+
+    @property
+    def duration_seconds(self) -> int | None:
+        return self.recording.duration_seconds
+
+    @property
+    def credits(self) -> str | None:
+        return self.recording.credits
 
     def __repr__(self) -> str:
         return (
             f"<Track id={self.id} edition_id={self.edition_id} "
-            f"position={self.position} title={self.title!r}>"
+            f"disc={self.disc_number} side={self.side!r} pos={self.position}>"
         )
 
 

@@ -1,8 +1,8 @@
 """Schemas (contratos) del modulo de discografia.
 
 Igual que en auth: los models ORM (`models.py`) nunca se exponen tal cual. Estos
-schemas son el contrato con la app movil, en los mismos tres niveles que los
-modelos: Release (la obra) -> Edition (una publicacion concreta) -> Track.
+schemas son el contrato con la app movil, en los mismos niveles que los modelos:
+Release -> Edition -> Track (que referencia a Recording).
 """
 
 from datetime import date, datetime
@@ -17,26 +17,49 @@ from app.modules.discography.models import EditionFormat, ImageType, ReleaseType
 
 
 class TrackCreate(BaseModel):
-    """Datos de un tema al crear/editar una edicion (va anidado)."""
+    """Datos de un tema al crear/editar una edicion (va anidado en el body).
 
-    position: int = Field(gt=0, description="Numero de pista (1, 2, 3...)")
-    title: str = Field(min_length=1, max_length=200)
+    Dos formas excluyentes:
+    - Grabacion nueva: enviar `title` (y opcionalmente `duration_seconds`,
+      `credits`). Se crea una nueva fila en `recordings`.
+    - Grabacion existente: enviar `recording_id`. Se reutiliza la grabacion
+      tal cual, sin duplicar creditos ni duracion. No se puede enviar `title`
+      junto a `recording_id`.
+    """
+
+    position: int = Field(gt=0, description="Numero de pista dentro de este disco/cara (1, 2, 3...)")
+    disc_number: int = Field(default=1, ge=1, description="Numero de disco (1 para CD unico o Cara A/B del primer disco)")
+    side: str | None = Field(default=None, max_length=10, description="Cara del disco: 'A', 'B'... Solo para vinilos; null para CDs")
+
+    # Forma 1: grabacion nueva
+    title: str | None = Field(default=None, min_length=1, max_length=200)
     duration_seconds: int | None = Field(default=None, gt=0)
+    credits: str | None = None
+
+    # Forma 2: grabacion existente
+    recording_id: int | None = None
+
+    @model_validator(mode="after")
+    def _check_recording_source(self) -> "TrackCreate":
+        if self.recording_id is not None and self.title is not None:
+            raise ValueError("No puedes enviar 'recording_id' y 'title' a la vez")
+        if self.recording_id is None and self.title is None:
+            raise ValueError("Debes enviar 'title' (grabacion nueva) o 'recording_id' (grabacion existente)")
+        return self
 
 
 def _validate_unique_positions(tracks: list[TrackCreate] | None) -> None:
-    """Rechaza (422) dos temas con el mismo numero de posicion.
+    """Rechaza (422) si dos temas del mismo disco/cara tienen la misma posicion.
 
-    Se valida aqui, antes de tocar la BD, en vez de dejar que lo atrape la
-    restriccion UNIQUE de la tabla: un 422 con un mensaje claro es mejor
-    experiencia que un 500 por un IntegrityError sin traducir. Compartida por
-    EditionCreate y EditionUpdate.
+    Se valida aqui, antes de tocar la BD, para devolver un 422 con mensaje claro
+    en vez de un 500 por un IntegrityError. Compartida por EditionCreate y
+    EditionUpdate.
     """
     if not tracks:
         return
-    positions = [t.position for t in tracks]
-    if len(positions) != len(set(positions)):
-        raise ValueError("Hay temas con el mismo numero de posicion")
+    keys = [(t.disc_number, t.side, t.position) for t in tracks]
+    if len(keys) != len(set(keys)):
+        raise ValueError("Hay temas con la misma combinacion de disc_number, side y position")
 
 
 class EditionCreate(BaseModel):
@@ -54,8 +77,6 @@ class EditionCreate(BaseModel):
     catalog_number: str | None = Field(default=None, max_length=100)
     release_date: date | None = None
     format: EditionFormat | None = None
-    # Sin max_length: texto libre (musicos, productor... / notas sobre la
-    # edicion), no hay un limite razonable que imponer de antemano.
     credits: str | None = None
     notes: str | None = None
     is_primary: bool = False
@@ -127,13 +148,34 @@ class ReleaseUpdate(BaseModel):
 # --- Salida (response) ---------------------------------------------------------
 
 
-class TrackRead(BaseModel):
-    """Vista publica de un tema."""
+class RecordingRead(BaseModel):
+    """Vista publica de una grabacion (para el endpoint de busqueda)."""
 
     id: int
-    position: int
     title: str
     duration_seconds: int | None
+    credits: str | None
+
+    model_config = {"from_attributes": True}
+
+
+class TrackRead(BaseModel):
+    """Vista publica de un tema dentro de una edicion.
+
+    Se presenta 'aplanado': el cliente ve title/duration_seconds/credits
+    directamente, sin saber que internamente vienen de Recording. El campo
+    recording_id se expone para que la app pueda reutilizarlo al curar
+    otras ediciones que incluyan la misma grabacion.
+    """
+
+    id: int
+    recording_id: int
+    position: int
+    disc_number: int
+    side: str | None
+    title: str
+    duration_seconds: int | None
+    credits: str | None
 
     model_config = {"from_attributes": True}
 

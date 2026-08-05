@@ -12,8 +12,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from sqlalchemy import or_
+
 from app.core.storage import StorageBackend, validate_image_upload
-from app.modules.discography.models import Edition, Image, ImageType, Release, ReleaseType, Track
+from app.modules.discography.models import Edition, Image, ImageType, Recording, Release, ReleaseType, Track
 from app.modules.discography.schemas import (
     EditionCreate,
     EditionUpdate,
@@ -36,15 +38,19 @@ image_not_found_exception = HTTPException(
     status_code=status.HTTP_404_NOT_FOUND,
     detail="Imagen no encontrada",
 )
+recording_not_found_exception = HTTPException(
+    status_code=status.HTTP_404_NOT_FOUND,
+    detail="Grabacion no encontrada",
+)
 
-# Carga en cadena: las ediciones de un Release, y los temas/imagenes de cada
-# edicion, en consultas batch (evita una consulta N+1 por nivel al serializar).
+# Carga en cadena: ediciones de un Release, y temas/imagenes/recordings de cada
+# edicion, en consultas batch (evita N+1 por nivel al serializar).
 _RELEASE_WITH_EDITIONS = (
-    selectinload(Release.editions).selectinload(Edition.tracks),
+    selectinload(Release.editions).selectinload(Edition.tracks).selectinload(Track.recording),
     selectinload(Release.editions).selectinload(Edition.images),
 )
 _EDITION_WITH_CHILDREN = (
-    selectinload(Edition.tracks),
+    selectinload(Edition.tracks).selectinload(Track.recording),
     selectinload(Edition.images),
 )
 
@@ -149,6 +155,41 @@ async def _demote_other_primary_editions(
         edition.is_primary = False
 
 
+async def _build_tracks(session: AsyncSession, tracks_data: list) -> list[Track]:
+    """Construye objetos Track a partir de TrackCreate.
+
+    Valida que los recording_id referenciados existen antes de insertar,
+    y crea Recording nuevos en linea para los temas sin recording_id.
+    """
+    result = []
+    for t in tracks_data:
+        if t.recording_id is not None:
+            rec = await session.get(Recording, t.recording_id)
+            if rec is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"recording_id {t.recording_id} no existe",
+                )
+            result.append(Track(
+                recording_id=t.recording_id,
+                position=t.position,
+                disc_number=t.disc_number,
+                side=t.side,
+            ))
+        else:
+            result.append(Track(
+                recording=Recording(
+                    title=t.title,
+                    duration_seconds=t.duration_seconds,
+                    credits=t.credits,
+                ),
+                position=t.position,
+                disc_number=t.disc_number,
+                side=t.side,
+            ))
+    return result
+
+
 async def create_edition(
     session: AsyncSession, release_id: int, data: EditionCreate
 ) -> Edition:
@@ -158,6 +199,7 @@ async def create_edition(
     if data.is_primary:
         await _demote_other_primary_editions(session, release_id)
 
+    tracks = await _build_tracks(session, data.tracks)
     edition = Edition(
         release_id=release_id,
         country=data.country,
@@ -169,14 +211,7 @@ async def create_edition(
         credits=data.credits,
         notes=data.notes,
         is_primary=data.is_primary,
-        tracks=[
-            Track(
-                position=track.position,
-                title=track.title,
-                duration_seconds=track.duration_seconds,
-            )
-            for track in data.tracks
-        ],
+        tracks=tracks,
     )
     session.add(edition)
     await session.commit()
@@ -200,11 +235,14 @@ async def update_edition(
         tracks_data = updates.pop("tracks")
         # Vaciar y hacer FLUSH antes de anadir los nuevos: si no, SQLAlchemy
         # puede emitir los INSERT antes que los DELETE de los temas viejos y
-        # chocar con el UNIQUE(edition_id, position) cuando se repite un numero
-        # de pista entre la tracklist vieja y la nueva.
+        # chocar con los indices UNIQUE cuando se repite una posicion.
         edition.tracks = []
         await session.flush()
-        edition.tracks = [Track(**track) for track in tracks_data]
+        from app.modules.discography.schemas import TrackCreate
+        edition.tracks = await _build_tracks(
+            session,
+            [TrackCreate(**track) for track in tracks_data],
+        )
 
     for field, value in updates.items():
         setattr(edition, field, value)
@@ -219,6 +257,24 @@ async def delete_edition(session: AsyncSession, release_id: int, edition_id: int
     edition = await _get_edition(session, release_id, edition_id)
     await session.delete(edition)
     await session.commit()
+
+
+# --- Recording (grabacion real de un tema, compartible entre ediciones) ----------
+
+
+async def search_recordings(session: AsyncSession, q: str) -> list[Recording]:
+    """Busca grabaciones por titulo (busqueda parcial, insensible a mayusculas).
+
+    Util para localizar el recording_id de una grabacion existente antes de
+    reutilizarla en otra edicion.
+    """
+    result = await session.execute(
+        select(Recording)
+        .where(Recording.title.ilike(f"%{q}%"))
+        .order_by(Recording.title)
+        .limit(50)
+    )
+    return list(result.scalars().all())
 
 
 # --- Image (portada, contraportada... de una edicion) ----------------------------
