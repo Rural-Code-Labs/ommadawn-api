@@ -243,23 +243,28 @@ avatar, y un rol de **superadministrador** que decide quién es `admin`.
 
 ## Discografía (Fase 5)
 
-Discos, recopilatorios, singles y bootlegs se modelan bajo un único concepto: **`Release`**
-(la obra, p. ej. "Tubular Bells"), con un campo `release_type` que los distingue. No `Album`,
-porque un single o un bootleg no son "un álbum" en sentido estricto.
+Discos, recopilatorios, singles, bootlegs y directos oficiales se modelan bajo un único
+concepto: **`Release`** (la obra, p. ej. "Tubular Bells"), con un campo `release_type` que
+los distingue (`studio` / `compilation` / `single` / `bootleg` / `live`). `bootleg` es para
+grabaciones no oficiales (fans); `live` para directos publicados por el sello.
 
-**Jerarquía de tres niveles** (como MusicBrainz distingue "release group" de "release"):
+**Jerarquía de cuatro niveles:**
 
 ```
-Release   (la obra abstracta: título, tipo)
-  └── Edition   (una publicación CONCRETA: país, sello, edition_name, nº de catálogo, fecha,
-                 formato, créditos, notas, is_primary)
-        └── Track   (la tracklist de ESA edición — puede variar entre ediciones)
+Release     (la obra abstracta: título, tipo, description)
+  └── Edition   (publicación CONCRETA: país, sello, edition_name, nº catálogo,
+                 fecha, formato, créditos, notas, is_primary)
+        ├── Track   (aparición de una grabación en ESA edición:
+        │             position, disc_number, side → Recording)
+        │     └── Recording  (la grabación real: title, duration_seconds, credits
+        │                     COMPARTIDA entre ediciones que incluyan el mismo tema)
+        └── Image   (portada, contraportada... con position reordenable)
 ```
 
-Se introdujo `Edition` porque un mismo disco puede tener varias publicaciones reales —la
-original de un país, una reedición remasterizada, una edición limitada de otro país con otra
-portada y hasta otra *tracklist* (bonus tracks)—, y esos datos (fecha, país, temas, futuras
-imágenes de portada) no pueden vivir en la obra abstracta: varían por edición.
+Se introdujo `Edition` porque un mismo disco puede tener varias publicaciones reales. Se
+introdujo `Recording` separada de `Track` para poder compartir la misma grabación entre
+varias ediciones (p. ej. "Tubular Bells Part One" en la edición original UK y en *Boxed*)
+sin duplicar créditos.
 
 Decisiones de diseño fijadas (para no repensarlas en cada fase futura):
 
@@ -272,7 +277,7 @@ Decisiones de diseño fijadas (para no repensarlas en cada fase futura):
   `compilation` / `single` / `bootleg`, en vez de herencia con JOIN. Se añadirá una tabla de
   detalle solo si un tipo necesita de verdad un campo exclusivo — hoy no hay ninguno conocido.
 - **`release_type` es texto validado por Python + `CHECK`, no un enum nativo de PostgreSQL.**
-  Se sabe que este conjunto de valores va a crecer (`directo` está pendiente); añadir un valor
+  El conjunto puede crecer si hace falta; añadir un valor
   a un `CHECK` es una migración más simple que la de un tipo nativo (`ALTER TYPE ... ADD
   VALUE`). La columna guarda el *valor* del enum (`"studio"`), no el nombre (`"STUDIO"`).
 - **`Edition.is_primary`** marca qué edición mostrar por defecto (p. ej. la portada en una
@@ -296,9 +301,16 @@ Decisiones de diseño fijadas (para no repensarlas en cada fase futura):
   para esa edición concreta (`catalog_number`, acotado a 100 caracteres, como `label`) y dos
   campos de texto libre sin límite de longitud (`Text`, no `String(n)`) para créditos
   (músicos, producción...) y notas generales sobre la edición.
-- **Cada `Track` pertenece a una única `Edition`** (1:N, sin compartir temas entre ediciones ni
-  publicaciones). Si el mismo tema aparece en dos ediciones o en un recopilatorio, hoy son filas
-  independientes. El día que la deduplicación importe de verdad, se migra a una relación N:M.
+- **`Track` y `Recording` están separados** (relación N:M a través de `Track`): una `Recording`
+  puede aparecer en varios `Track` de distintas ediciones. `Track` guarda `position`,
+  `disc_number` (default 1) y `side` (nullable, solo vinilos: `"A"`, `"B"`…). Al crear una
+  edición, cada tema del array acepta dos formas excluyentes: `title` (nueva `Recording`) o
+  `recording_id` (reutilizar existente). La unicidad de posición se garantiza con dos índices
+  parciales (uno cuando `side IS NULL`, otro cuando `side IS NOT NULL`) porque PostgreSQL trata
+  NULL≠NULL en restricciones UNIQUE, lo que dejaría pasar duplicados con `side=NULL` si fuera
+  un único índice. `GET /discography/recordings?q=...` permite buscar por título para localizar
+  el `recording_id` antes de reutilizar. La FK `Track.recording_id` usa `ondelete=RESTRICT`
+  para que borrar una `Recording` falle si sigue siendo referenciada — protección de datos.
 - **Leer el catálogo es público; crear/editar/borrar exige ser administrador**
   (`require_admin`, en `auth/dependencies.py`, reutilizable por futuros módulos de catálogo).
   No hay endpoint para promover a admin: se hace directamente en BD (o en los tests, vía sesión
@@ -312,6 +324,7 @@ Endpoints actuales:
 
 | Método | Ruta | Acceso |
 |---|---|---|
+| `GET` | `/api/v1/discography/recordings?q=` | Público (búsqueda de grabaciones por título) |
 | `GET` | `/api/v1/discography/releases` | Público (filtro `?type=`) |
 | `GET` | `/api/v1/discography/releases/{id}` | Público (con ediciones, temas e imágenes anidados) |
 | `POST` / `PATCH` / `DELETE` | `/api/v1/discography/releases[/{id}]` | Admin |

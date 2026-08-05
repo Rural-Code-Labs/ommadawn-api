@@ -229,14 +229,19 @@ sequenceDiagram
 
 ## Discografía
 
-Discos, recopilatorios, singles y bootlegs se catalogan en tres niveles:
+Discos, recopilatorios, singles, bootlegs y directos se catalogan en cuatro niveles:
 
 ```
-Release   (la obra: "Tubular Bells", con su tipo)
-  └── Edition   (país, sello, nº de catálogo, fecha, formato, créditos, notas, is_primary)
-        ├── Track   (la tracklist de esa edición)
-        └── Image   (portada, contraportada... de esa edición)
+Release     (la obra abstracta: "Tubular Bells", tipo: studio/compilation/single/bootleg/live)
+  └── Edition   (publicación concreta: país, sello, nº catálogo, fecha, formato, créditos, notas)
+        ├── Track     (aparición de una grabación en ESA edición: posición, disco, cara)
+        │     └── Recording  (la grabación real: título, duración, créditos — COMPARTIDA)
+        └── Image     (portada, contraportada... con posición reordenable)
 ```
+
+`Recording` es la pieza clave: cuando la misma grabación aparece en varias ediciones (por
+ejemplo "Tubular Bells Part One" en la edición original y en el recopilatorio *Boxed*), se
+referencia el mismo `recording_id` desde ambos `Track` — los créditos se escriben una sola vez.
 
 `Release` tiene un campo `description` (texto libre, sin límite de longitud) para la
 historia e información de la obra — contexto de grabación, curiosidades, relevancia…
@@ -259,7 +264,8 @@ Leer el catálogo es **público**; crear, editar o borrar exige ser **administra
 
 | Método | Ruta | Protegido | Descripción |
 |---|---|---|---|
-| `GET` | `/api/v1/discography/releases` | — | Lista obras (filtro opcional `?type=studio\|compilation\|single\|bootleg`) |
+| `GET` | `/api/v1/discography/recordings` | — | Busca grabaciones por título (`?q=tubular`) para obtener su `recording_id` y reutilizarlas |
+| `GET` | `/api/v1/discography/releases` | — | Lista obras (filtro opcional `?type=studio\|compilation\|single\|bootleg\|live`) |
 | `GET` | `/api/v1/discography/releases/{id}` | — | Detalle de una obra, con sus ediciones y temas |
 | `POST` | `/api/v1/discography/releases` | 🔒👑 | Crea una obra (título + tipo, sin ediciones aún) |
 | `PATCH` / `DELETE` | `/api/v1/discography/releases/{id}` | 🔒👑 | Edita o borra una obra |
@@ -271,6 +277,15 @@ Leer el catálogo es **público**; crear, editar o borrar exige ser **administra
 
 🔒👑 = requiere `Authorization: Bearer <access token>` de un usuario **administrador**
 (`is_admin=True`; se marca directamente en BD, no hay endpoint público para ello).
+
+**Tracks**: cada `Track` referencia una `Recording` (por `recording_id`). Al crear/editar una
+edición, cada tema del array `tracks` acepta dos formas:
+- **Grabación nueva**: `title` (+ `duration_seconds`, `credits` opcionales), `position`, `disc_number` (default 1), `side` (nullable, solo vinilos: `"A"`, `"B"`…).
+- **Grabación existente**: `recording_id` + `position` + `disc_number` + `side`. Los campos `title`/`credits` se ignoran: vienen de la `Recording` original.
+
+`disc_number` y `side` permiten agrupar por CD o cara: el cliente construye la cabecera
+("CD 1", "Cara A") a partir de esos valores. `TrackRead` expone `recording_id` para que
+la app pueda reutilizarlo en otras ediciones; `GET /recordings?q=...` ayuda a encontrarlo.
 
 **Imágenes**: solo se guarda la `url` en la base de datos, nunca los bytes. En desarrollo
 se sirven desde disco local (`/media`, fuera de `/api/v1`); en producción será un bucket de
