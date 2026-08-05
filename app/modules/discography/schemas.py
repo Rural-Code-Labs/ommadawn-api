@@ -87,6 +87,11 @@ class EditionCreate(BaseModel):
     def _validate_country(cls, v: object) -> object:
         return validate_country_code(v)  # type: ignore[arg-type]
 
+    @field_validator("edition_name", mode="before")
+    @classmethod
+    def _empty_str_to_none(cls, v: object) -> object:
+        return None if v == "" else v
+
     @model_validator(mode="after")
     def _check_positions(self) -> "EditionCreate":
         _validate_unique_positions(self.tracks)
@@ -118,6 +123,11 @@ class EditionUpdate(BaseModel):
     @classmethod
     def _validate_country(cls, v: object) -> object:
         return validate_country_code(v)  # type: ignore[arg-type]
+
+    @field_validator("edition_name", mode="before")
+    @classmethod
+    def _empty_str_to_none(cls, v: object) -> object:
+        return None if v == "" else v
 
     @model_validator(mode="after")
     def _check_positions(self) -> "EditionUpdate":
