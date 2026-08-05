@@ -50,6 +50,7 @@ class ReleaseType(str, enum.Enum):
     COMPILATION = "compilation"
     SINGLE = "single"
     BOOTLEG = "bootleg"
+    LIVE = "live"
 
 
 class EditionFormat(str, enum.Enum):
