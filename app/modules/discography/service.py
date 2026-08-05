@@ -262,6 +262,24 @@ async def delete_edition(session: AsyncSession, release_id: int, edition_id: int
 # --- Recording (grabacion real de un tema, compartible entre ediciones) ----------
 
 
+async def delete_recording(session: AsyncSession, recording_id: int) -> None:
+    """Borra una grabacion. Lanza 409 si sigue referenciada por algun Track."""
+    from sqlalchemy.exc import IntegrityError
+
+    recording = await session.get(Recording, recording_id)
+    if recording is None:
+        raise recording_not_found_exception
+    await session.delete(recording)
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No se puede borrar: la grabacion esta en uso en una o mas ediciones",
+        )
+
+
 async def update_recording(
     session: AsyncSession, recording_id: int, data: "RecordingUpdate"
 ) -> Recording:

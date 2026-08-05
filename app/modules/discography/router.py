@@ -84,6 +84,26 @@ async def search_recordings(
     return await service.search_recordings(session, q)
 
 
+@router.delete(
+    "/recordings/{recording_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Borrar una grabacion (requiere administrador)",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: _NO_AUTH,
+        status.HTTP_403_FORBIDDEN: _FORBIDDEN,
+        status.HTTP_404_NOT_FOUND: {"model": ErrorMessage, "description": "La grabacion no existe"},
+        status.HTTP_409_CONFLICT: {"model": ErrorMessage, "description": "La grabacion esta en uso en una o mas ediciones"},
+    },
+)
+async def delete_recording(
+    recording_id: int,
+    session: AsyncSession = Depends(get_session),
+    _admin: User = Depends(require_admin),
+) -> None:
+    """Borra una grabacion. Falla con 409 si algun Track la referencia todavia."""
+    await service.delete_recording(session, recording_id)
+
+
 @router.patch(
     "/recordings/{recording_id}",
     response_model=RecordingRead,
