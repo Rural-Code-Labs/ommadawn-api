@@ -331,6 +331,8 @@ Endpoints actuales:
 | Método | Ruta | Acceso |
 |---|---|---|
 | `GET` | `/api/v1/discography/recordings?q=` | Público (búsqueda de grabaciones por título) |
+| `PATCH` | `/api/v1/discography/recordings/{id}` | Admin |
+| `DELETE` | `/api/v1/discography/recordings/{id}` | Admin (409 si hay tracks que la referencian) |
 | `GET` | `/api/v1/discography/releases` | Público (filtro `?type=`) |
 | `GET` | `/api/v1/discography/releases/{id}` | Público (con ediciones, temas e imágenes anidados) |
 | `POST` / `PATCH` / `DELETE` | `/api/v1/discography/releases[/{id}]` | Admin |
