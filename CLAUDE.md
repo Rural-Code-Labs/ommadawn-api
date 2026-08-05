@@ -311,6 +311,12 @@ Decisiones de diseño fijadas (para no repensarlas en cada fase futura):
   un único índice. `GET /discography/recordings?q=...` permite buscar por título para localizar
   el `recording_id` antes de reutilizar. La FK `Track.recording_id` usa `ondelete=RESTRICT`
   para que borrar una `Recording` falle si sigue siendo referenciada — protección de datos.
+- **Cadena vacía → null en campos de texto opcionales**: `edition_name` (y cualquier campo
+  similar en el futuro) tiene un `field_validator(mode="before")` que convierte `""` a `None`.
+  Motivo: swift-openapi-generator declara los campos opcionales como `String?`, y un `String?`
+  en nil se omite del JSON en vez de enviarse como `null`. Para que el cliente iOS pueda
+  *borrar* un campo, envía `""` — la API lo interpreta como "limpiar el valor". No hace falta
+  tocar el esquema OpenAPI ni el post-proceso de `openapi.py`.
 - **Leer el catálogo es público; crear/editar/borrar exige ser administrador**
   (`require_admin`, en `auth/dependencies.py`, reutilizable por futuros módulos de catálogo).
   No hay endpoint para promover a admin: se hace directamente en BD (o en los tests, vía sesión
