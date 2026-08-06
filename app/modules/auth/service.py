@@ -11,7 +11,7 @@ Recordatorio del diseno:
     token robado deja de servir en cuanto el usuario legitimo renueva.
 """
 
-import re
+import secrets
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -28,6 +28,7 @@ from app.core.exceptions import (
     inactive_user_exception,
     invalid_google_token_exception,
     invalid_refresh_token_exception,
+    username_already_set_exception,
     username_taken_exception,
 )
 from app.core.security import (
@@ -248,33 +249,20 @@ async def login_user(
     return await _issue_token_pair(session, user.id)
 
 
-def _username_from_email(local_part: str) -> str:
-    """Deriva la BASE de un username a partir de la parte local de un email.
+async def _generate_random_username(session: AsyncSession) -> str:
+    """Genera un username aleatorio ("user-123456") para altas por Google.
 
-    Solo caracteres validos (letras, digitos, guion bajo), en minuscula. No
-    garantiza unicidad: eso lo resuelve `_generate_username_from_email`
-    probando sufijos numericos hasta encontrar uno libre.
+    A diferencia del registro por contrasena (donde la persona elige su
+    username), Google no da uno: se genera un PROVISIONAL, sin relacion con el
+    email ni el nombre. `username_is_default=True` marca esto en el usuario, lo
+    que le permite cambiarlo una unica vez desde su perfil (ver
+    `update_profile`). Reintenta con otro numero si el candidato ya existe,
+    mismo patron que el resto de generacion de identificadores unicos del repo.
     """
-    base = re.sub(r"[^a-zA-Z0-9_]", "", local_part).lower()
-    if len(base) < 3:
-        base = f"user{base}"
-    return base[:46]  # deja hueco para un sufijo numerico (username <= 50)
-
-
-async def _generate_username_from_email(session: AsyncSession, email: str) -> str:
-    """Genera un username disponible a partir de un email (alta via Google).
-
-    Se usa solo al CREAR una cuenta por Google: el registro por contrasena pide
-    el username explicitamente, pero Google no lo conoce. Prueba la base tal
-    cual y, si ya esta en uso, le anade un sufijo numerico creciente.
-    """
-    base = _username_from_email(email.split("@", 1)[0])
-    candidate = base
-    suffix = 0
-    while await _get_by_username_or_email(session, candidate) is not None:
-        suffix += 1
-        candidate = f"{base}{suffix}"
-    return candidate
+    while True:
+        candidate = f"user-{secrets.randbelow(1_000_000):06d}"
+        if await _get_by_username_or_email(session, candidate) is None:
+            return candidate
 
 
 async def google_login(session: AsyncSession, id_token: str) -> TokenPair:
@@ -289,7 +277,8 @@ async def google_login(session: AsyncSession, id_token: str) -> TokenPair:
          ciegas solo por coincidir el email) ni se crea un duplicado: 409
          (`google_email_conflict_exception`).
       3. No existe ni por `google_id` ni por email -> alta nueva, vinculada
-         desde el primer momento.
+         desde el primer momento, con un username aleatorio provisional
+         (`username_is_default=True`, ver `_generate_random_username`).
     """
     try:
         payload = verify_google_id_token(id_token)
@@ -310,7 +299,8 @@ async def google_login(session: AsyncSession, id_token: str) -> TokenPair:
             raise google_email_conflict_exception
 
         user = User(
-            username=await _generate_username_from_email(session, email),
+            username=await _generate_random_username(session),
+            username_is_default=True,
             email=email,
             full_name=payload.get("name"),
             avatar_url=payload.get("picture"),
@@ -420,8 +410,27 @@ async def update_profile(session: AsyncSession, user: User, data: UserUpdate) ->
     se toca) de uno enviado como `null` (se aplica, p. ej. borrar una
     `birth_date` puesta por error). Mismo patron que `ReleaseUpdate` en
     discografia.
+
+    `username` se trata aparte del resto (no es un `setattr` generico): solo se
+    permite si `username_is_default` es `True` (username provisional de un alta
+    por Google, aun no elegido por la persona). Si lo es, se valida unicidad
+    igual que en el registro y se apaga el flag: a partir de aqui el username
+    queda fijo, igual que el de cualquier otra cuenta. Si NO lo es, se rechaza
+    con un 409 distinguible (`username_already_set_exception`) en vez de
+    ignorarlo en silencio.
     """
     updates = data.model_dump(exclude_unset=True)
+
+    if "username" in updates:
+        new_username = updates.pop("username")
+        if not user.username_is_default:
+            raise username_already_set_exception
+        existing = await _get_by_username_or_email(session, new_username)
+        if existing is not None and existing.id != user.id:
+            raise username_taken_exception
+        user.username = new_username
+        user.username_is_default = False
+
     for field, value in updates.items():
         setattr(user, field, value)
 

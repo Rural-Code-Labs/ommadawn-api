@@ -92,3 +92,15 @@ google_email_conflict_exception = HTTPException(
     status_code=status.HTTP_409_CONFLICT,
     detail="email_conflict",
 )
+
+# 409 -> intenta cambiar el username por PATCH /auth/me pero ya no puede: o
+# bien lo eligio en el registro por contrasena, o bien ya gasto su UNICO cambio
+# permitido (una cuenta creada por Google empieza con un username provisional
+# generado al azar, cambiable una sola vez). Mismo criterio que
+# `google_email_conflict_exception`: `detail` es un CODIGO corto, no una
+# frase, para que la app pueda explicarle a la persona por que no puede tocarlo
+# sin tener que parsear un texto humano.
+username_already_set_exception = HTTPException(
+    status_code=status.HTTP_409_CONFLICT,
+    detail="username_already_set",
+)

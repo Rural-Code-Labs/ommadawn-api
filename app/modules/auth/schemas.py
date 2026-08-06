@@ -66,12 +66,23 @@ class UserUpdate(BaseModel):
 
     PATCH de verdad: solo se aplican los campos PRESENTES en el body (el
     service usa `model_dump(exclude_unset=True)`), igual que en discografia.
-    Deliberadamente NO estan aqui `username`, `email`, la contrasena, `avatar`
-    (tiene su propio endpoint de subida) ni `is_admin`/`is_super_admin`: cada
-    uno tiene sus propias reglas (unicidad, verificacion...) y se abordaran
-    aparte si hace falta.
+    Deliberadamente NO estan aqui `email`, la contrasena, `avatar` (tiene su
+    propio endpoint de subida) ni `is_admin`/`is_super_admin`: cada uno tiene
+    sus propias reglas (unicidad, verificacion...) y se abordaran aparte si
+    hace falta.
+
+    `username` SI esta, con una regla especial (no un PATCH libre): solo se
+    acepta si `User.username_is_default` es `True` (username provisional
+    generado al azar en un alta por Google, nunca elegido por la persona). El
+    `service` es quien decide si se permite o no (`username_already_set_exception`
+    si no); aqui solo se valida la FORMA, igual que en `UserCreate`. NO es
+    `str | None` (mismo motivo que `theme_preference`: la columna no es
+    nullable, un username no se "borra"): el valor por defecto (cadena vacia,
+    nunca validada porque `exclude_unset` la descarta si se omite) hace que un
+    `null` explicito en el body de 422 en vez de intentar dejar el campo vacio.
     """
 
+    username: str = Field(default="", min_length=3, max_length=50)
     full_name: str | None = Field(default=None, max_length=120)
     country: str | None = Field(
         default=None, min_length=2, max_length=2, pattern="^[A-Z]{2}$"
@@ -115,6 +126,7 @@ class UserRead(BaseModel):
 
     id: int
     username: str
+    username_is_default: bool
     email: str
     full_name: str | None
     country: str | None

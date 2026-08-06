@@ -284,13 +284,15 @@ Google.
      duplicado.** Responde `409` con `{"detail": "email_conflict"}`.
   3. No existe ni por `google_id` ni por email → alta nueva, vinculada desde el primer
      momento; `full_name`/`avatar_url` se rellenan con `name`/`picture` del token si vienen
-     (no es bloqueante si no vienen). El `username` no lo da Google: se deriva de la parte
-     local del email (`_generate_username_from_email`), probando sufijos numéricos
-     (`nombre`, `nombre1`, `nombre2`...) hasta encontrar uno libre.
-- **`email_conflict` es un CÓDIGO, no una frase** — única excepción al resto de
-  `app/core/exceptions.py`, donde `detail` siempre es texto humano en español. Decisión
-  explícita del usuario: la app necesita distinguir este 409 de cualquier otro por el propio
-  valor del campo, sin parsear un mensaje.
+     (no es bloqueante si no vienen). El `username` NO lo da Google ni se deriva del email:
+     se genera al azar (`_generate_random_username`, `"user-" + 6 dígitos`,
+     `secrets.randbelow`), reintentando con otro número si ya existe. La persona no lo elige
+     en este paso — ver "Username provisional" más abajo.
+- **`email_conflict` es un CÓDIGO, no una frase** — misma excepción al resto de
+  `app/core/exceptions.py`, donde `detail` siempre es texto humano en español (comparte
+  criterio con `username_already_set`, ver abajo). Decisión explícita del usuario: la app
+  necesita distinguir este 409 de cualquier otro por el propio valor del campo, sin parsear
+  un mensaje.
 - **`email_verified` del token se exige `True`**: si Google no ha verificado el email (caso
   raro, pero posible con algunos proveedores federados detrás de Google), se trata igual que
   un token inválido (`401`), no se confía en un email sin verificar para vincular/crear cuenta.
@@ -298,8 +300,39 @@ Google.
   que en los tests se sustituye por un doble (`monkeypatch.setattr(service,
   "verify_google_id_token", fake)`) que devuelve un payload controlado o lanza el error que se
   quiera simular — mismo patrón que `MAX_IMAGE_SIZE_BYTES` en los tests de avatar/imágenes.
+  Para probar el reintento por colisión de username se mockea `service.secrets.randbelow` con
+  una secuencia fija de valores.
 - **Vinculación/desvinculación desde perfil** (`POST`/`DELETE /auth/me/google`) queda como
   tarea posterior: no forma parte de este endpoint.
+
+### Username provisional (altas por Google)
+
+Una cuenta creada por `POST /auth/google` no elige su `username` en el momento del alta (a
+diferencia del registro por contraseña, donde se pide explícitamente): se genera uno al azar
+y `User.username_is_default=True` marca que es provisional. `PATCH /auth/me` deja cambiarlo
+**una única vez**, sin límite de tiempo, a partir de ese momento queda fijo como el de
+cualquier otra cuenta.
+
+- **`User.username_is_default`** (`Boolean`, NOT NULL, default `False`): `True` solo para
+  cuentas de Google recién creadas; `False` para todo lo demás (registro por contraseña
+  desde el alta, o una cuenta de Google que ya gastó su único cambio). Migración
+  `f0ee802141d7` — necesitó `server_default='false'` porque `users` ya tenía filas (mismo
+  gotcha que `is_admin`/`is_super_admin` en su día, ver "Perfil, avatar y roles" arriba).
+- **`UserUpdate.username`**: NO es `str | None` pese a ser opcional en el PATCH — mismo
+  patrón que `theme_preference` (la columna no es nullable, un username no se "vacía"): un
+  valor por defecto (`""`, nunca validado porque Pydantic no valida defaults salvo
+  `validate_default=True`, y `exclude_unset` lo descarta si se omite) hace que un `null`
+  explícito en el body dé **422** en vez de intentar dejar el campo vacío.
+- **`service.update_profile` trata `username` aparte** del resto de campos (no es un
+  `setattr` genérico como `full_name`/`country`/etc.):
+  1. Si `username_is_default` es `False` → **rechaza** con `409` y
+     `{"detail": "username_already_set"}` (código corto, mismo criterio que `email_conflict`:
+     la app necesita distinguirlo sin parsear texto). No se ignora en silencio ni da un 422
+     genérico.
+  2. Si es `True` → valida unicidad (mismo `username_taken_exception` que en el registro, con
+     `detail` en prosa — este SÍ es el mensaje humano habitual, no un código), aplica el
+     cambio y pone `username_is_default=False`.
+- **No hay ventana de tiempo**: el cambio único no caduca; solo se consume al USARSE.
 
 ---
 

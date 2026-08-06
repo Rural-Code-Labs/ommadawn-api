@@ -76,6 +76,15 @@ _GOOGLE_EMAIL_CONFLICT = {
         "pensado para que la app lo distinga sin parsear texto."
     ),
 }
+_USERNAME_CONFLICT = {
+    "model": ErrorMessage,
+    "description": (
+        "El username ya esta en uso (`detail: \"El nombre de usuario ya esta en "
+        'uso"`), o la cuenta ya no puede cambiarlo (`detail: "username_already_set"`, '
+        "codigo corto, no frase: ya se registro con uno explicito o ya gasto su "
+        "unico cambio permitido)."
+    ),
+}
 
 
 @router.post(
@@ -193,7 +202,10 @@ async def me(current_user: User = Depends(get_current_user)) -> User:
     "/me",
     response_model=UserRead,
     summary="Editar los datos de perfil del usuario autenticado",
-    responses={status.HTTP_401_UNAUTHORIZED: _NO_AUTH},
+    responses={
+        status.HTTP_401_UNAUTHORIZED: _NO_AUTH,
+        status.HTTP_409_CONFLICT: _USERNAME_CONFLICT,
+    },
 )
 async def update_me(
     data: UserUpdate,
@@ -201,7 +213,12 @@ async def update_me(
     session: AsyncSession = Depends(get_session),
 ) -> User:
     """Edita los campos de perfil presentes en el body (full_name, country, city,
-    birth_date). No toca username/email/contrasena/avatar/roles."""
+    birth_date, theme_preference). No toca email/contrasena/avatar/roles.
+
+    `username` es un caso especial: solo se acepta si la cuenta todavia tiene
+    el username PROVISIONAL que se genera en un alta por Google
+    (`username_is_default=True`); a partir de ese unico cambio (o siempre, si
+    se registro por contrasena) queda fijo — ver `service.update_profile`."""
     return await service.update_profile(session, current_user, data)
 
 

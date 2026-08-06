@@ -5,6 +5,8 @@ los detalles internos. Con `asyncio_mode = "auto"` (en pyproject) no hace falta
 marcar cada test: pytest-asyncio los detecta por ser `async def`.
 """
 
+import re
+
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -49,6 +51,8 @@ async def test_register_creates_user_without_leaking_password(client: AsyncClien
     assert body["is_active"] is True
     assert body["is_admin"] is False
     assert body["has_google"] is False
+    # Registro por contrasena: el username lo eligio la persona, no es provisional.
+    assert body["username_is_default"] is False
     # Lo mas importante: la contrasena (ni su hash) NUNCA sale por la API.
     assert "password" not in body
     assert "hashed_password" not in body
@@ -171,7 +175,9 @@ async def test_google_login_creates_new_user_when_email_unknown(
     result = await db_session.execute(select(User).where(User.email == "newuser@gmail.com"))
     user = result.scalar_one()
     assert user.google_id == "google-uid-123"
-    assert user.username == "newuser"  # derivado de la parte local del email
+    # Username PROVISIONAL aleatorio, sin relacion con el email: "user-" + 6 digitos.
+    assert re.fullmatch(r"user-\d{6}", user.username)
+    assert user.username_is_default is True
     assert user.full_name == "New User"
     assert user.avatar_url == "https://example.com/avatar.jpg"
     assert user.hashed_password is None
@@ -182,6 +188,7 @@ async def test_google_login_creates_new_user_when_email_unknown(
         f"{BASE}/me", headers={"Authorization": f"Bearer {body['access_token']}"}
     )
     assert me.json()["has_google"] is True
+    assert me.json()["username_is_default"] is True
 
 
 async def test_google_login_existing_linked_user_logs_in_without_duplicating(
@@ -250,24 +257,29 @@ async def test_google_login_inactive_user_returns_403(
     assert resp.status_code == 403
 
 
-async def test_google_login_generates_unique_username_on_collision(
+async def test_google_login_retries_random_username_on_collision(
     client: AsyncClient, db_session: AsyncSession, monkeypatch
 ):
+    # "user-000042" ya existe: el generador debe descartarlo y probar otro
+    # numero, no fallar ni reutilizar el username de otra cuenta.
     await client.post(
         f"{BASE}/register",
         json={
-            "username": "newuser",
-            "email": "newuser@existing.com",
+            "username": "user-000042",
+            "email": "otro@existing.com",
             "password": "tubular123",
         },
     )
-    _mock_google_token(monkeypatch)  # email local part tambien es "newuser"
+
+    calls = iter([42, 43])
+    monkeypatch.setattr(service.secrets, "randbelow", lambda _n: next(calls))
+    _mock_google_token(monkeypatch)
 
     resp = await client.post(f"{BASE}/google", json={"id_token": "fake-token"})
     assert resp.status_code == 200
 
     result = await db_session.execute(select(User).where(User.google_id == "google-uid-123"))
-    assert result.scalar_one().username == "newuser1"
+    assert result.scalar_one().username == "user-000043"
 
 
 async def test_google_login_rejects_empty_id_token(client: AsyncClient):
@@ -581,18 +593,113 @@ async def test_update_profile_rejects_null_theme_preference(client: AsyncClient)
 
 
 async def test_update_profile_cannot_touch_admin_fields(client: AsyncClient):
-    # UserUpdate no declara is_admin/is_super_admin/username/email: si se mandan,
+    # UserUpdate no declara is_admin/is_super_admin/email: si se mandan,
     # Pydantic los ignora (no son campos del schema, no dan ni 422).
     tokens = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {tokens['access_token']}"}
 
     resp = await client.patch(
-        f"{BASE}/me", json={"is_admin": True, "username": "otro"}, headers=headers
+        f"{BASE}/me", json={"is_admin": True, "email": "otro@x.com"}, headers=headers
     )
     assert resp.status_code == 200
     body = resp.json()
     assert body["is_admin"] is False
-    assert body["username"] == CREDS["username"]
+    assert body["email"] == CREDS["email"]
+
+
+# --- Cambio de username (una unica vez, solo si es provisional) ----------------
+
+
+async def test_update_profile_password_account_cannot_change_username(
+    client: AsyncClient,
+):
+    # Un registro por contrasena elige su username explicitamente:
+    # username_is_default queda en False desde el alta, asi que PATCH lo rechaza.
+    tokens = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    resp = await client.patch(f"{BASE}/me", json={"username": "otro"}, headers=headers)
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "username_already_set"
+
+    me = await client.get(f"{BASE}/me", headers=headers)
+    assert me.json()["username"] == CREDS["username"]
+
+
+async def test_update_profile_google_account_can_set_username_once(
+    client: AsyncClient, monkeypatch
+):
+    _mock_google_token(monkeypatch)
+    tokens = (await client.post(f"{BASE}/google", json={"id_token": "fake-token"})).json()
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    me_before = (await client.get(f"{BASE}/me", headers=headers)).json()
+    assert me_before["username_is_default"] is True
+
+    resp = await client.patch(
+        f"{BASE}/me", json={"username": "elegido"}, headers=headers
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["username"] == "elegido"
+    assert body["username_is_default"] is False
+
+
+async def test_update_profile_google_account_cannot_change_username_twice(
+    client: AsyncClient, monkeypatch
+):
+    _mock_google_token(monkeypatch)
+    tokens = (await client.post(f"{BASE}/google", json={"id_token": "fake-token"})).json()
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    first = await client.patch(f"{BASE}/me", json={"username": "elegido"}, headers=headers)
+    assert first.status_code == 200
+
+    second = await client.patch(
+        f"{BASE}/me", json={"username": "otro-mas"}, headers=headers
+    )
+    assert second.status_code == 409
+    assert second.json()["detail"] == "username_already_set"
+
+    me = await client.get(f"{BASE}/me", headers=headers)
+    assert me.json()["username"] == "elegido"  # no lo toco el segundo intento
+
+
+async def test_update_profile_username_change_respects_uniqueness(
+    client: AsyncClient, monkeypatch
+):
+    await client.post(f"{BASE}/register", json=CREDS)  # username "mike" ya existe
+
+    _mock_google_token(monkeypatch)
+    tokens = (await client.post(f"{BASE}/google", json={"id_token": "fake-token"})).json()
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    resp = await client.patch(f"{BASE}/me", json={"username": "mike"}, headers=headers)
+    assert resp.status_code == 409
+    # Codigo distinto de "username_already_set": aqui el problema es que el
+    # username elegido ya lo tiene OTRO usuario, no que la cuenta no pueda cambiar.
+    assert resp.json()["detail"] != "username_already_set"
+
+
+async def test_update_profile_rejects_too_short_username(
+    client: AsyncClient, monkeypatch
+):
+    _mock_google_token(monkeypatch)
+    tokens = (await client.post(f"{BASE}/google", json={"id_token": "fake-token"})).json()
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    resp = await client.patch(f"{BASE}/me", json={"username": "ab"}, headers=headers)
+    assert resp.status_code == 422
+
+
+async def test_update_profile_rejects_null_username(client: AsyncClient):
+    # username NO es nullable en BD: un null explicito debe dar 422, igual que
+    # theme_preference (ver test_update_profile_rejects_null_theme_preference).
+    tokens = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    resp = await client.patch(f"{BASE}/me", json={"username": None}, headers=headers)
+    assert resp.status_code == 422
 
 
 # --- Superadmin: gestion de quien es admin -----------------------------------------

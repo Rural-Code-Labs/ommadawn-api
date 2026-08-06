@@ -47,6 +47,17 @@ class User(Base):
         String(255), unique=True, index=True, nullable=False
     )
 
+    # True solo para cuentas dadas de alta por Google con un username
+    # PROVISIONAL generado al azar (la persona no lo eligio, ver
+    # service._generate_random_username). Permite que PATCH /auth/me acepte
+    # cambiar el username UNA sola vez (y lo pone a False al hacerlo); a partir
+    # de ahi (o siempre, en el registro por contrasena, donde ya se elige
+    # explicitamente) el username queda fijo. Not nullable: siempre hay un
+    # valor concreto, no un dato "desconocido".
+    username_is_default: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+
     # Nombre del usuario. Opcional a nivel de BD para no bloquear el futuro
     # login con Google/Facebook (donde puede que solo llegue el email).
     full_name: Mapped[str | None] = mapped_column(String(120), nullable=True)

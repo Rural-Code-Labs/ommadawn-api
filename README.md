@@ -185,7 +185,7 @@ Se manejan **dos tokens con roles distintos**:
 | `POST` | `/api/v1/auth/refresh` | — | Rota el refresh token y emite un par nuevo |
 | `POST` | `/api/v1/auth/logout` | 🔒 | Revoca el refresh token (`204`) |
 | `GET` | `/api/v1/auth/me` | 🔒 | Devuelve el usuario autenticado |
-| `PATCH` | `/api/v1/auth/me` | 🔒 | Edita `full_name`, `country` (ISO 3166-1 alpha-2), `city`, `birth_date`, `theme_preference` (solo los campos enviados) |
+| `PATCH` | `/api/v1/auth/me` | 🔒 | Edita `full_name`, `country` (ISO 3166-1 alpha-2), `city`, `birth_date`, `theme_preference` (solo los campos enviados); `username` solo si `username_is_default` es `true` (ver más abajo) |
 | `POST` | `/api/v1/auth/me/avatar` | 🔒 | Sube (o sustituye) el avatar (`multipart/form-data`) |
 | `DELETE` | `/api/v1/auth/me/avatar` | 🔒 | Borra el avatar (idempotente) |
 | `GET` | `/api/v1/auth/users` | 🔒👑 | Lista todos los usuarios |
@@ -205,8 +205,10 @@ BD — no hay endpoint para auto-nombrarse superadmin).
 emisor y audiencia = `GOOGLE_WEB_CLIENT_ID`, el mismo Web Client ID que usan
 iOS y, en el futuro, Android como `serverClientID`). Tres casos:
 
-1. **Email nuevo** → crea la cuenta (vinculada desde el alta; `username` se
-   deriva del email, `full_name`/`avatar_url` se rellenan si Google los da).
+1. **Email nuevo** → crea la cuenta (vinculada desde el alta; `username` es un
+   valor **provisional aleatorio** tipo `user-123456` — Google no da uno, y la
+   persona no lo elige en este paso; `full_name`/`avatar_url` se rellenan si
+   Google los da).
 2. **Email ya vinculado a esta cuenta de Google** → login normal, mismo par
    de tokens que `/login`.
 3. **Email ya existe pero se creó por contraseña** → `409` con
@@ -217,6 +219,19 @@ iOS y, en el futuro, Android como `serverClientID`). Tres casos:
 `UserRead` (la respuesta de `/register` y `/me`) incluye `has_google: bool`
 (`google_id is not None`), para que la app sepa si la cuenta tiene Google
 vinculado sin depender de heurísticas.
+
+#### Elegir username tras un alta por Google
+
+Una cuenta creada por Google empieza con `username_is_default: true` en
+`UserRead`. Mientras sea `true`, `PATCH /auth/me` acepta cambiar `username`
+**una única vez** (misma validación que en el registro: 3-50 caracteres,
+único); al aplicarlo, `username_is_default` pasa a `false` y el username
+queda fijo, igual que el de cualquier otra cuenta (sin límite de tiempo para
+hacer ese cambio). Si `username_is_default` ya es `false` — porque se
+registró por contraseña (siempre `false` desde el alta) o porque ya gastó su
+único cambio — un intento de tocar `username` responde `409` con
+`{"detail": "username_already_set"}`, un código corto y distinguible, no un
+422 genérico ni un cambio ignorado en silencio.
 
 ### Flujo: del login al logout
 
