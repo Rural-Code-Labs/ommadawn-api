@@ -82,6 +82,9 @@ class Release(Base):
 
     # `native_enum=False` -> se guarda como String + CHECK, no como tipo nativo
     # de Postgres. Ver el porque en el docstring de ReleaseType.
+    # `create_constraint=True` -> emite de verdad el CHECK. SQLAlchemy lo trae a
+    # False por defecto desde 1.4, asi que sin esto la validacion seria SOLO de
+    # Python y un UPDATE a mano en psql podria colar cualquier cadena.
     # `values_callable` -> que la columna guarde el VALOR ("studio") y no el
     # NOMBRE ("STUDIO") del miembro de Python; asi la BD habla el mismo idioma
     # que el JSON de la API.
@@ -89,6 +92,8 @@ class Release(Base):
         Enum(
             ReleaseType,
             native_enum=False,
+            create_constraint=True,
+            name="ck_releases_release_type",
             validate_strings=True,
             values_callable=lambda enum_cls: [member.value for member in enum_cls],
         ),
@@ -169,6 +174,8 @@ class Edition(Base):
         Enum(
             EditionFormat,
             native_enum=False,
+            create_constraint=True,
+            name="ck_editions_format",
             validate_strings=True,
             values_callable=lambda enum_cls: [member.value for member in enum_cls],
         ),
@@ -350,6 +357,8 @@ class Image(Base):
         Enum(
             ImageType,
             native_enum=False,
+            create_constraint=True,
+            name="ck_images_image_type",
             validate_strings=True,
             values_callable=lambda enum_cls: [member.value for member in enum_cls],
         ),

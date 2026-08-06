@@ -74,6 +74,8 @@ class User(Base):
         Enum(
             ThemePreference,
             native_enum=False,
+            create_constraint=True,
+            name="ck_users_theme_preference",
             validate_strings=True,
             values_callable=lambda enum_cls: [member.value for member in enum_cls],
         ),

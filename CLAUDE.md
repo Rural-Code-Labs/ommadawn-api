@@ -277,9 +277,24 @@ Decisiones de diseño fijadas (para no repensarlas en cada fase futura):
   `compilation` / `single` / `bootleg`, en vez de herencia con JOIN. Se añadirá una tabla de
   detalle solo si un tipo necesita de verdad un campo exclusivo — hoy no hay ninguno conocido.
 - **`release_type` es texto validado por Python + `CHECK`, no un enum nativo de PostgreSQL.**
-  El conjunto puede crecer si hace falta; añadir un valor
-  a un `CHECK` es una migración más simple que la de un tipo nativo (`ALTER TYPE ... ADD
-  VALUE`). La columna guarda el *valor* del enum (`"studio"`), no el nombre (`"STUDIO"`).
+  El conjunto puede crecer si hace falta; añadir un valor a un `CHECK` es una migración más
+  simple que la de un tipo nativo (`ALTER TYPE ... ADD VALUE`). La columna guarda el *valor*
+  del enum (`"studio"`), no el nombre (`"STUDIO"`).
+- **Los `CHECK` hay que pedirlos explícitamente: `create_constraint=True`.** Durante un tiempo
+  estos cuatro campos se documentaron como "validados por Python + `CHECK`" pero el `CHECK`
+  **no existía en la BD**: `Enum(native_enum=False)` de SQLAlchemy trae `create_constraint=False`
+  por defecto desde la 1.4, así que solo validaba Python y un `UPDATE` a mano en `psql` podía
+  colar cualquier cadena. Se corrigió en la migración `f6d9ebe87c0b`, que añade los cuatro
+  (`ck_releases_release_type`, `ck_editions_format`, `ck_images_image_type`,
+  `ck_users_theme_preference`). **Consecuencia a recordar**: añadir un valor nuevo a uno de
+  estos enums ahora **sí requiere migración** (DROP + CREATE del `CHECK` con la lista nueva).
+  Antes la migración salía vacía — de hecho al añadir `live` se generó una migración vacía que
+  hubo que borrar, y ese fue el síntoma que destapó el problema.
+- **Ojo con el ancho del `varchar`**: el enum se guarda con la anchura del valor más largo
+  (`compilation` → `varchar(11)`, `system` → `varchar(6)`). Un valor nuevo más largo necesita
+  además ensanchar la columna. Alembic lo detecta, así que no es silencioso, pero es un paso
+  extra fácil de olvidar. También quedan anchos heredados: `country` sigue en `varchar(100)` en
+  `users` y `editions` aunque hoy solo admita códigos ISO de 2 letras.
 - **`Edition.is_primary`** marca qué edición mostrar por defecto (p. ej. la portada en una
   lista) cuando un `Release` tiene varias. Se garantiza "como mucho una principal por obra"
   con un **índice único parcial** (`uq_editions_release_primary`, `WHERE is_primary`) — no un
