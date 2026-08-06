@@ -52,6 +52,7 @@ async def test_register_creates_user_without_leaking_password(client: AsyncClien
     assert body["is_active"] is True
     assert body["is_admin"] is False
     assert body["has_google"] is False
+    assert body["has_password"] is True
     # Registro por contrasena: el username lo eligio la persona, no es provisional.
     assert body["username_is_default"] is False
     # Lo mas importante: la contrasena (ni su hash) NUNCA sale por la API.
@@ -190,6 +191,7 @@ async def test_google_login_creates_new_user_when_email_unknown(
     )
     assert me.json()["has_google"] is True
     assert me.json()["username_is_default"] is True
+    assert me.json()["has_password"] is False  # cuenta creada solo por Google
 
 
 async def test_google_login_existing_linked_user_logs_in_without_duplicating(
@@ -499,6 +501,7 @@ async def test_google_only_account_can_set_a_password_for_the_first_time(
 
     # Ahora la cuenta tambien entra por contrasena.
     me = (await client.get(f"{BASE}/me", headers=headers)).json()
+    assert me["has_password"] is True
     login = await client.post(
         f"{BASE}/login",
         json={"username_or_email": me["username"], "password": "primeracontra1"},

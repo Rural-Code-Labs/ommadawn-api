@@ -143,11 +143,16 @@ class User(Base):
         nullable=False,
     )
 
-    # Propiedad calculada (no columna): la usa UserRead con from_attributes=True
-    # sin necesitar guardar un booleano redundante con google_id en BD.
+    # Propiedades calculadas (no columnas): las usa UserRead con
+    # from_attributes=True sin necesitar guardar booleanos redundantes con
+    # google_id/hashed_password en BD.
     @property
     def has_google(self) -> bool:
         return self.google_id is not None
+
+    @property
+    def has_password(self) -> bool:
+        return self.hashed_password is not None
 
     def __repr__(self) -> str:
         # Representacion util para depurar. Nunca incluimos la contrasena.

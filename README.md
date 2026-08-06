@@ -220,8 +220,11 @@ iOS y, en el futuro, Android como `serverClientID`). Tres casos:
    código.
 
 `UserRead` (la respuesta de `/register` y `/me`) incluye `has_google: bool`
-(`google_id is not None`), para que la app sepa si la cuenta tiene Google
-vinculado sin depender de heurísticas.
+(`google_id is not None`) y `has_password: bool` (`hashed_password is not
+None`), para que la app sepa si la cuenta tiene Google vinculado y/o
+contraseña propia sin depender de heurísticas — útil, por ejemplo, para
+ocultar el campo "contraseña actual" en el formulario de cambio de
+contraseña cuando la cuenta es solo-Google.
 
 #### Elegir username tras un alta por Google
 

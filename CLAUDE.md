@@ -271,11 +271,15 @@ Google.
 - **`User.google_id`** (nullable, unique, indexado): el `sub` del ID token (identificador
   estable de la cuenta de Google), NO el email — el email puede cambiar en Google, el `sub`
   no. La mayoría de usuarios (login por contraseña) lo tienen a `None`.
-- **`UserRead.has_google`**: booleano calculado (`google_id is not None`), NO una columna en
-  BD — es una `@property` en el modelo `User` que `from_attributes=True` lee igual que un
-  campo normal (mismo patrón que `Track.title`/`duration_seconds`/`credits` en discografía,
-  que "aplanan" `Recording` hacia `Track`). Sale en `/register` y `/me`; no hace falta migración
-  porque no es una columna.
+- **`UserRead.has_google`** / **`UserRead.has_password`**: booleanos calculados
+  (`google_id is not None` / `hashed_password is not None`), NO columnas en BD — son
+  `@property` en el modelo `User` que `from_attributes=True` lee igual que un campo normal
+  (mismo patrón que `Track.title`/`duration_seconds`/`credits` en discografía, que "aplanan"
+  `Recording` hacia `Track`). Salen en `/register` y `/me` (los únicos endpoints que devuelven
+  `UserRead`; `/login` y `/google` devuelven `TokenPair`, no el perfil); ninguno necesita
+  migración porque no son columnas. `has_password` existe para que la app pueda
+  ocultar el campo "contraseña actual" en el formulario de `POST /auth/me/password` cuando la
+  cuenta es solo-Google, en vez de mostrarlo vacío con una nota.
 - **Lógica en `service.google_login`, tres casos**:
   1. Ya existe un usuario con ese `google_id` → login normal (mismo flujo que `login_user`
      desde ahí en adelante, factorizado en el helper común `_issue_token_pair`).
