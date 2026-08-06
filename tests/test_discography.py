@@ -31,7 +31,6 @@ TUBULAR_BELLS = {"title": "Tubular Bells", "release_type": "studio"}
 
 UK_1973_EDITION = {
     "country": "GB",
-    "label": "Virgin Records",
     "edition_name": "Edicion original",
     "catalog_number": "V2001",
     "release_date": "1973-05-25",
@@ -342,12 +341,12 @@ async def test_update_edition_only_touches_sent_fields(
 
     resp = await client.patch(
         f"{BASE}/releases/{release_id}/editions/{edition_id}",
-        json={"label": "Virgin Records (reedicion)"},
+        json={"edition_name": "Reedicion remasterizada"},
         headers=headers,
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["label"] == "Virgin Records (reedicion)"
+    assert body["edition_name"] == "Reedicion remasterizada"
     assert body["country"] == "GB"  # no enviado, no se toca
     assert body["format"] == "vinyl"  # tampoco se toca
     assert len(body["tracks"]) == 2  # tampoco se tocan
@@ -446,7 +445,7 @@ async def test_update_unknown_edition_returns_404(
 
     resp = await client.patch(
         f"{BASE}/releases/{release_id}/editions/999",
-        json={"label": "X"},
+        json={"edition_name": "X"},
         headers=headers,
     )
     assert resp.status_code == 404
@@ -466,7 +465,7 @@ async def test_edition_from_another_release_is_not_reachable(
 
     resp = await client.patch(
         f"{BASE}/releases/{other_release_id}/editions/{edition_id}",
-        json={"label": "X"},
+        json={"edition_name": "X"},
         headers=headers,
     )
     assert resp.status_code == 404
@@ -802,3 +801,171 @@ async def test_move_image_requires_admin(client: AsyncClient, db_session: AsyncS
         json={"direction": "up"},
     )
     assert resp.status_code == 401
+
+
+# --- Label (sellos discograficos) -------------------------------------------------
+
+
+async def _create_label(client: AsyncClient, headers: dict, name: str = "Virgin") -> int:
+    """Helper: crea un sello y devuelve su id."""
+    resp = await client.post(f"{BASE}/labels", json={"name": name}, headers=headers)
+    assert resp.status_code == 201
+    return resp.json()["id"]
+
+
+async def test_list_labels_is_public_and_starts_empty(client: AsyncClient):
+    resp = await client.get(f"{BASE}/labels")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+async def test_create_label_requires_admin(client: AsyncClient):
+    resp = await client.post(f"{BASE}/labels", json={"name": "Virgin"})
+    assert resp.status_code == 401
+
+
+async def test_admin_can_create_and_list_label(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    resp = await client.post(
+        f"{BASE}/labels", json={"name": "Virgin", "notes": "Sello de Branson"}, headers=headers
+    )
+    assert resp.status_code == 201
+    assert resp.json()["name"] == "Virgin"
+    assert resp.json()["notes"] == "Sello de Branson"
+
+    listed = await client.get(f"{BASE}/labels")
+    assert [lab["name"] for lab in listed.json()] == ["Virgin"]
+
+
+async def test_duplicate_label_name_is_rejected_case_insensitively(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    await _create_label(client, headers, "Virgin")
+
+    # Misma grafia y distinta capitalizacion: ambas deben chocar (409).
+    for name in ("Virgin", "virgin", "VIRGIN"):
+        resp = await client.post(f"{BASE}/labels", json={"name": name}, headers=headers)
+        assert resp.status_code == 409, f"'{name}' deberia colisionar"
+
+
+async def test_labels_can_be_filtered_by_name(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    await _create_label(client, headers, "Virgin")
+    await _create_label(client, headers, "Mercury")
+
+    resp = await client.get(f"{BASE}/labels", params={"q": "merc"})
+    assert [lab["name"] for lab in resp.json()] == ["Mercury"]
+
+
+async def test_admin_can_rename_label(client: AsyncClient, db_session: AsyncSession):
+    headers = await _admin_headers(client, db_session)
+    label_id = await _create_label(client, headers, "Virgin")
+
+    resp = await client.patch(
+        f"{BASE}/labels/{label_id}", json={"name": "Virgin Records"}, headers=headers
+    )
+    assert resp.status_code == 200
+    assert resp.json()["name"] == "Virgin Records"
+
+
+async def test_update_unknown_label_returns_404(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    resp = await client.patch(f"{BASE}/labels/999", json={"name": "X"}, headers=headers)
+    assert resp.status_code == 404
+
+
+async def test_edition_carries_its_label_nested(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    label_id = await _create_label(client, headers, "Virgin")
+    release_id = await _create_release(client, headers)
+
+    resp = await client.post(
+        f"{BASE}/releases/{release_id}/editions",
+        json={**UK_1973_EDITION, "label_id": label_id},
+        headers=headers,
+    )
+    assert resp.status_code == 201
+    # El sello viaja como objeto anidado, no como cadena.
+    assert resp.json()["label"] == {"id": label_id, "name": "Virgin", "notes": None}
+
+
+async def test_edition_without_label_has_null(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    release_id, _ = await _create_release_and_edition(client, headers)
+
+    release = (await client.get(f"{BASE}/releases/{release_id}")).json()
+    assert release["editions"][0]["label"] is None
+
+
+async def test_edition_with_unknown_label_id_returns_404(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    release_id = await _create_release(client, headers)
+
+    resp = await client.post(
+        f"{BASE}/releases/{release_id}/editions",
+        json={**UK_1973_EDITION, "label_id": 999},
+        headers=headers,
+    )
+    assert resp.status_code == 404
+
+
+async def test_label_can_be_cleared_from_an_edition(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    label_id = await _create_label(client, headers, "Virgin")
+    release_id = await _create_release(client, headers)
+    created = await client.post(
+        f"{BASE}/releases/{release_id}/editions",
+        json={**UK_1973_EDITION, "label_id": label_id},
+        headers=headers,
+    )
+    edition_id = created.json()["id"]
+
+    resp = await client.patch(
+        f"{BASE}/releases/{release_id}/editions/{edition_id}",
+        json={"label_id": None},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["label"] is None
+
+
+async def test_label_in_use_cannot_be_deleted(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    label_id = await _create_label(client, headers, "Virgin")
+    release_id = await _create_release(client, headers)
+    await client.post(
+        f"{BASE}/releases/{release_id}/editions",
+        json={**UK_1973_EDITION, "label_id": label_id},
+        headers=headers,
+    )
+
+    resp = await client.delete(f"{BASE}/labels/{label_id}", headers=headers)
+    assert resp.status_code == 409
+
+
+async def test_unused_label_can_be_deleted(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    label_id = await _create_label(client, headers, "Sello Huerfano")
+
+    resp = await client.delete(f"{BASE}/labels/{label_id}", headers=headers)
+    assert resp.status_code == 204
+    assert (await client.get(f"{BASE}/labels")).json() == []

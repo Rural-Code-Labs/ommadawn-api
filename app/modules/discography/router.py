@@ -20,13 +20,24 @@ from app.core.storage import StorageBackend, get_storage_backend
 from app.modules.auth.dependencies import require_admin
 from app.modules.auth.models import User
 from app.modules.discography import service
-from app.modules.discography.models import Edition, Image, ImageType, Recording, Release, ReleaseType
+from app.modules.discography.models import (
+    Edition,
+    Image,
+    ImageType,
+    Label,
+    Recording,
+    Release,
+    ReleaseType,
+)
 from app.modules.discography.schemas import (
     EditionCreate,
     EditionRead,
     EditionUpdate,
     ImageMoveRequest,
     ImageRead,
+    LabelCreate,
+    LabelRead,
+    LabelUpdate,
     RecordingRead,
     RecordingUpdate,
     ReleaseCreate,
@@ -62,6 +73,92 @@ _IMAGE_TOO_LARGE = {
     "model": ErrorMessage,
     "description": "La imagen supera el tamano maximo permitido (10 MB)",
 }
+
+
+# --- Label (sellos discograficos) ------------------------------------------------
+
+_LABEL_NOT_FOUND = {"model": ErrorMessage, "description": "El sello no existe"}
+_LABEL_DUPLICATE = {
+    "model": ErrorMessage,
+    "description": "Ya existe un sello con ese nombre",
+}
+
+
+@router.get(
+    "/labels",
+    response_model=list[LabelRead],
+    summary="Listar sellos discograficos",
+)
+async def list_labels(
+    q: str | None = Query(default=None, description="Filtra por texto en el nombre"),
+    session: AsyncSession = Depends(get_session),
+) -> list[Label]:
+    """Lista los sellos, opcionalmente filtrados por nombre."""
+    return await service.list_labels(session, q)
+
+
+@router.post(
+    "/labels",
+    response_model=LabelRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Crear un sello (requiere administrador)",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: _NO_AUTH,
+        status.HTTP_403_FORBIDDEN: _FORBIDDEN,
+        status.HTTP_409_CONFLICT: _LABEL_DUPLICATE,
+    },
+)
+async def create_label(
+    data: LabelCreate,
+    session: AsyncSession = Depends(get_session),
+    _admin: User = Depends(require_admin),
+) -> Label:
+    """Crea un sello. El nombre es unico sin distinguir mayusculas."""
+    return await service.create_label(session, data)
+
+
+@router.patch(
+    "/labels/{label_id}",
+    response_model=LabelRead,
+    summary="Editar un sello (requiere administrador)",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: _NO_AUTH,
+        status.HTTP_403_FORBIDDEN: _FORBIDDEN,
+        status.HTTP_404_NOT_FOUND: _LABEL_NOT_FOUND,
+        status.HTTP_409_CONFLICT: _LABEL_DUPLICATE,
+    },
+)
+async def update_label(
+    label_id: int,
+    data: LabelUpdate,
+    session: AsyncSession = Depends(get_session),
+    _admin: User = Depends(require_admin),
+) -> Label:
+    """Edita el nombre y/o las notas de un sello."""
+    return await service.update_label(session, label_id, data)
+
+
+@router.delete(
+    "/labels/{label_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Borrar un sello (requiere administrador)",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: _NO_AUTH,
+        status.HTTP_403_FORBIDDEN: _FORBIDDEN,
+        status.HTTP_404_NOT_FOUND: _LABEL_NOT_FOUND,
+        status.HTTP_409_CONFLICT: {
+            "model": ErrorMessage,
+            "description": "El sello esta en uso en una o mas ediciones",
+        },
+    },
+)
+async def delete_label(
+    label_id: int,
+    session: AsyncSession = Depends(get_session),
+    _admin: User = Depends(require_admin),
+) -> None:
+    """Borra un sello. Falla con 409 si alguna edicion lo usa todavia."""
+    await service.delete_label(session, label_id)
 
 
 # --- Recording (busqueda de grabaciones para reutilizar) -------------------------

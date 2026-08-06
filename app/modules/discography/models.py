@@ -122,6 +122,46 @@ class Release(Base):
         return f"<Release id={self.id} title={self.title!r} type={self.release_type.value}>"
 
 
+class Label(Base):
+    """Tabla `labels`: un sello discografico (Virgin, Mercury, Warner...).
+
+    Se saco del texto libre que antes vivia en `Edition.label` para poder
+    gestionarlo desde la app (crear, renombrar) y para que dos ediciones del
+    mismo sello apunten de verdad a la misma fila, en vez de repetir la cadena
+    con el riesgo de erratas ("Virgin" / "virgin" / "Virgin Records").
+
+    La unicidad del nombre es INSENSIBLE A MAYUSCULAS (indice funcional sobre
+    `lower(name)`): evita acabar con "Virgin" y "virgin" como sellos distintos.
+    """
+
+    __tablename__ = "labels"
+    __table_args__ = (
+        Index("uq_labels_name_lower", text("lower(name)"), unique=True),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    name: Mapped[str] = mapped_column(String(150), nullable=False)
+
+    # Texto libre para cualquier apunte sobre el sello (historia, matices...).
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    editions: Mapped[list["Edition"]] = relationship(back_populates="label")
+
+    def __repr__(self) -> str:
+        return f"<Label id={self.id} name={self.name!r}>"
+
+
 class Edition(Base):
     """Tabla `editions`: una publicacion CONCRETA de un `Release`.
 
@@ -155,7 +195,12 @@ class Edition(Base):
 
     # Todos nullable: no siempre se conocen (p. ej. bootlegs sin pais/sello claro).
     country: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    label: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    # El sello vive en su propia tabla (ver Label): se gestiona desde la app y
+    # se reutiliza entre ediciones, en vez de repetir el texto en cada fila.
+    # RESTRICT igual que Track.recording_id: no se borra un sello en uso.
+    label_id: Mapped[int | None] = mapped_column(
+        ForeignKey("labels.id", ondelete="RESTRICT"), index=True, nullable=True
+    )
     # Nombre descriptivo de la edicion, p. ej. "Reedicion remasterizada 2009".
     edition_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     # Referencia del sello para ESTA edicion, p. ej. "V2001" o "CDV 2002".
@@ -197,6 +242,7 @@ class Edition(Base):
     )
 
     release: Mapped["Release"] = relationship(back_populates="editions")
+    label: Mapped["Label | None"] = relationship(back_populates="editions")
     tracks: Mapped[list["Track"]] = relationship(
         back_populates="edition",
         cascade="all, delete-orphan",

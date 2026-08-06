@@ -15,7 +15,16 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy import or_
 
 from app.core.storage import StorageBackend, validate_image_upload
-from app.modules.discography.models import Edition, Image, ImageType, Recording, Release, ReleaseType, Track
+from app.modules.discography.models import (
+    Edition,
+    Image,
+    ImageType,
+    Label,
+    Recording,
+    Release,
+    ReleaseType,
+    Track,
+)
 from app.modules.discography.schemas import (
     EditionCreate,
     EditionUpdate,
@@ -42,16 +51,22 @@ recording_not_found_exception = HTTPException(
     status_code=status.HTTP_404_NOT_FOUND,
     detail="Grabacion no encontrada",
 )
+label_not_found_exception = HTTPException(
+    status_code=status.HTTP_404_NOT_FOUND,
+    detail="Sello no encontrado",
+)
 
 # Carga en cadena: ediciones de un Release, y temas/imagenes/recordings de cada
 # edicion, en consultas batch (evita N+1 por nivel al serializar).
 _RELEASE_WITH_EDITIONS = (
     selectinload(Release.editions).selectinload(Edition.tracks).selectinload(Track.recording),
     selectinload(Release.editions).selectinload(Edition.images),
+    selectinload(Release.editions).selectinload(Edition.label),
 )
 _EDITION_WITH_CHILDREN = (
     selectinload(Edition.tracks).selectinload(Track.recording),
     selectinload(Edition.images),
+    selectinload(Edition.label),
 )
 
 
@@ -199,11 +214,14 @@ async def create_edition(
     if data.is_primary:
         await _demote_other_primary_editions(session, release_id)
 
+    if data.label_id is not None:
+        await _get_label_or_404(session, data.label_id)  # 404 si el sello no existe
+
     tracks = await _build_tracks(session, data.tracks)
     edition = Edition(
         release_id=release_id,
         country=data.country,
-        label=data.label,
+        label_id=data.label_id,
         edition_name=data.edition_name,
         catalog_number=data.catalog_number,
         release_date=data.release_date,
@@ -215,7 +233,7 @@ async def create_edition(
     )
     session.add(edition)
     await session.commit()
-    await session.refresh(edition, attribute_names=["tracks", "images"])
+    await session.refresh(edition, attribute_names=["tracks", "images", "label"])
     return edition
 
 
@@ -225,6 +243,10 @@ async def update_edition(
     """Edita una edicion. Solo toca los campos presentes en el body (PATCH real)."""
     edition = await _get_edition(session, release_id, edition_id)
     updates = data.model_dump(exclude_unset=True)
+
+    # Un label_id enviado (y no nulo) tiene que existir; null = quitar el sello.
+    if updates.get("label_id") is not None:
+        await _get_label_or_404(session, updates["label_id"])
 
     if updates.get("is_primary") is True:
         await _demote_other_primary_editions(
@@ -248,7 +270,7 @@ async def update_edition(
         setattr(edition, field, value)
 
     await session.commit()
-    await session.refresh(edition, attribute_names=["tracks", "images"])
+    await session.refresh(edition, attribute_names=["tracks", "images", "label"])
     return edition
 
 
@@ -259,25 +281,100 @@ async def delete_edition(session: AsyncSession, release_id: int, edition_id: int
     await session.commit()
 
 
+# --- Label (sello discografico) --------------------------------------------------
+
+
+_duplicate_label_exception = HTTPException(
+    status_code=status.HTTP_409_CONFLICT,
+    detail="Ya existe un sello con ese nombre",
+)
+
+
+async def _get_label_or_404(session: AsyncSession, label_id: int) -> Label:
+    label = await session.get(Label, label_id)
+    if label is None:
+        raise label_not_found_exception
+    return label
+
+
+async def list_labels(session: AsyncSession, q: str | None = None) -> list[Label]:
+    """Lista sellos, opcionalmente filtrados por texto en el nombre."""
+    query = select(Label)
+    if q:
+        query = query.where(Label.name.ilike(f"%{q}%"))
+    result = await session.execute(query.order_by(Label.name))
+    return list(result.scalars().all())
+
+
+async def create_label(session: AsyncSession, data: "LabelCreate") -> Label:
+    """Crea un sello. Lanza 409 si el nombre ya existe (sin distinguir mayusculas)."""
+    from sqlalchemy.exc import IntegrityError
+
+    label = Label(name=data.name.strip(), notes=data.notes)
+    session.add(label)
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise _duplicate_label_exception
+    await session.refresh(label)
+    return label
+
+
+async def update_label(
+    session: AsyncSession, label_id: int, data: "LabelUpdate"
+) -> Label:
+    """Edita un sello. Solo toca los campos presentes en el body (PATCH real)."""
+    from sqlalchemy.exc import IntegrityError
+
+    label = await _get_label_or_404(session, label_id)
+    updates = data.model_dump(exclude_unset=True)
+    if "name" in updates and updates["name"] is not None:
+        updates["name"] = updates["name"].strip()
+    for field, value in updates.items():
+        setattr(label, field, value)
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise _duplicate_label_exception
+    await session.refresh(label)
+    return label
+
+
+async def delete_label(session: AsyncSession, label_id: int) -> None:
+    """Borra un sello. Lanza 409 si alguna edicion lo sigue usando."""
+    label = await _get_label_or_404(session, label_id)
+    in_use = await session.scalar(
+        select(Edition.id).where(Edition.label_id == label_id).limit(1)
+    )
+    if in_use is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No se puede borrar: el sello esta en uso en una o mas ediciones",
+        )
+    await session.delete(label)
+    await session.commit()
+
+
 # --- Recording (grabacion real de un tema, compartible entre ediciones) ----------
 
 
 async def delete_recording(session: AsyncSession, recording_id: int) -> None:
     """Borra una grabacion. Lanza 409 si sigue referenciada por algun Track."""
-    from sqlalchemy.exc import IntegrityError
-
     recording = await session.get(Recording, recording_id)
     if recording is None:
         raise recording_not_found_exception
-    await session.delete(recording)
-    try:
-        await session.commit()
-    except IntegrityError:
-        await session.rollback()
+    in_use = await session.scalar(
+        select(Track.id).where(Track.recording_id == recording_id).limit(1)
+    )
+    if in_use is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="No se puede borrar: la grabacion esta en uso en una o mas ediciones",
         )
+    await session.delete(recording)
+    await session.commit()
 
 
 async def update_recording(

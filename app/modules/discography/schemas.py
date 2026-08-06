@@ -72,7 +72,7 @@ class EditionCreate(BaseModel):
     country: str | None = Field(
         default=None, min_length=2, max_length=2, pattern="^[A-Z]{2}$"
     )
-    label: str | None = Field(default=None, max_length=150)
+    label_id: int | None = None
     edition_name: str | None = Field(default=None, max_length=200)
     catalog_number: str | None = Field(default=None, max_length=100)
     release_date: date | None = None
@@ -109,7 +109,7 @@ class EditionUpdate(BaseModel):
     country: str | None = Field(
         default=None, min_length=2, max_length=2, pattern="^[A-Z]{2}$"
     )
-    label: str | None = None
+    label_id: int | None = None
     edition_name: str | None = None
     catalog_number: str | None = None
     release_date: date | None = None
@@ -133,6 +133,20 @@ class EditionUpdate(BaseModel):
     def _check_positions(self) -> "EditionUpdate":
         _validate_unique_positions(self.tracks)
         return self
+
+
+class LabelCreate(BaseModel):
+    """Datos para crear un sello (body de POST /labels)."""
+
+    name: str = Field(min_length=1, max_length=150)
+    notes: str | None = None
+
+
+class LabelUpdate(BaseModel):
+    """Datos para editar un sello (body de PATCH /labels/{id}). PATCH parcial."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=150)
+    notes: str | None = None
 
 
 class RecordingUpdate(BaseModel):
@@ -164,6 +178,16 @@ class ReleaseUpdate(BaseModel):
 
 
 # --- Salida (response) ---------------------------------------------------------
+
+
+class LabelRead(BaseModel):
+    """Vista publica de un sello discografico."""
+
+    id: int
+    name: str
+    notes: str | None
+
+    model_config = {"from_attributes": True}
 
 
 class RecordingUsageRead(BaseModel):
@@ -236,7 +260,9 @@ class EditionRead(BaseModel):
 
     id: int
     country: str | None
-    label: str | None
+    # Objeto anidado (no una cadena): la app necesita el `id` para poder
+    # cambiar el sello, y el `name` para mostrarlo, en una sola respuesta.
+    label: LabelRead | None
     edition_name: str | None
     catalog_number: str | None
     release_date: date | None
