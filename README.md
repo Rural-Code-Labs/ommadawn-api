@@ -264,7 +264,7 @@ Leer el catálogo es **público**; crear, editar o borrar exige ser **administra
 
 | Método | Ruta | Protegido | Descripción |
 |---|---|---|---|
-| `GET` | `/api/v1/discography/labels` | — | Lista sellos discográficos (filtro `?q=` por nombre) |
+| `GET` | `/api/v1/discography/labels` | — | Lista sellos con `edition_count`; orden: más usados primero, empates por nombre (filtro `?q=`) |
 | `POST` | `/api/v1/discography/labels` | 🔒👑 | Crea un sello (nombre único sin distinguir mayúsculas) |
 | `PATCH` / `DELETE` | `/api/v1/discography/labels/{id}` | 🔒👑 | Edita o borra un sello (409 en DELETE si alguna edición lo usa) |
 | `GET` | `/api/v1/discography/recordings` | — | Busca grabaciones por título (`?q=tubular`); cada resultado incluye `usages` con las ediciones donde aparece |

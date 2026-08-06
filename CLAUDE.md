@@ -348,7 +348,7 @@ Endpoints actuales:
 
 | Método | Ruta | Acceso |
 |---|---|---|
-| `GET` | `/api/v1/discography/labels` | Público (filtro `?q=` por nombre) |
+| `GET` | `/api/v1/discography/labels` | Público (filtro `?q=` por nombre; orden: `edition_count DESC`, nombre ASC) |
 | `POST` / `PATCH` / `DELETE` | `/api/v1/discography/labels[/{id}]` | Admin (409 en DELETE si en uso) |
 | `GET` | `/api/v1/discography/recordings?q=` | Público (búsqueda por título; devuelve `usages` con release_title, edition_name, release_date) |
 | `PATCH` | `/api/v1/discography/recordings/{id}` | Admin |
@@ -387,6 +387,10 @@ apunten a la misma fila real.
   elimina la columna de texto original.
 - `EditionRead.label` es un objeto `LabelRead` anidado (no solo un `id`), para que el cliente
   iOS reciba nombre y notas sin necesidad de un segundo request.
+- **`LabelRead.edition_count`**: número de ediciones que usan ese sello. `GET /labels` lo
+  calcula con un `outerjoin + GROUP BY` y ordena por él (`edition_count DESC`, nombre ASC).
+  Cuando `LabelRead` viaja anidado en una `EditionRead` (serializado desde ORM sin ese
+  cálculo), el campo vale `0` por defecto — es el único contexto donde ese valor no es exacto.
 
 ### Imágenes (portadas, contraportadas...) y almacenamiento
 
