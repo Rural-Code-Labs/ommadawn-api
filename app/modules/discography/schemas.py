@@ -186,6 +186,7 @@ class LabelRead(BaseModel):
     id: int
     name: str
     notes: str | None
+    edition_count: int = 0
 
     model_config = {"from_attributes": True}
 

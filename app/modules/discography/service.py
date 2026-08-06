@@ -8,11 +8,9 @@ reutilizar `HTTPException`, igual que hace `core/exceptions.py`.
 from uuid import uuid4
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-
-from sqlalchemy import or_
 
 from app.core.storage import StorageBackend, validate_image_upload
 from app.modules.discography.models import (
@@ -28,6 +26,7 @@ from app.modules.discography.models import (
 from app.modules.discography.schemas import (
     EditionCreate,
     EditionUpdate,
+    LabelRead,
     ReleaseCreate,
     ReleaseUpdate,
 )
@@ -297,13 +296,22 @@ async def _get_label_or_404(session: AsyncSession, label_id: int) -> Label:
     return label
 
 
-async def list_labels(session: AsyncSession, q: str | None = None) -> list[Label]:
-    """Lista sellos, opcionalmente filtrados por texto en el nombre."""
-    query = select(Label)
+async def list_labels(session: AsyncSession, q: str | None = None) -> list["LabelRead"]:
+    """Lista sellos con su numero de ediciones; orden: edition_count DESC, nombre ASC."""
+    count_col = func.count(Edition.id).label("edition_count")
+    query = (
+        select(Label, count_col)
+        .outerjoin(Edition, Edition.label_id == Label.id)
+        .group_by(Label.id)
+        .order_by(count_col.desc(), Label.name.asc())
+    )
     if q:
         query = query.where(Label.name.ilike(f"%{q}%"))
-    result = await session.execute(query.order_by(Label.name))
-    return list(result.scalars().all())
+    rows = (await session.execute(query)).all()
+    return [
+        LabelRead(id=label.id, name=label.name, notes=label.notes, edition_count=count)
+        for label, count in rows
+    ]
 
 
 async def create_label(session: AsyncSession, data: "LabelCreate") -> Label:

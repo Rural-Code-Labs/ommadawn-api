@@ -895,7 +895,11 @@ async def test_edition_carries_its_label_nested(
     )
     assert resp.status_code == 201
     # El sello viaja como objeto anidado, no como cadena.
-    assert resp.json()["label"] == {"id": label_id, "name": "Virgin", "notes": None}
+    label = resp.json()["label"]
+    assert label["id"] == label_id
+    assert label["name"] == "Virgin"
+    assert label["notes"] is None
+    assert label["edition_count"] == 0  # 0 porque viene del ORM sin el count calculado
 
 
 async def test_edition_without_label_has_null(
@@ -969,3 +973,32 @@ async def test_unused_label_can_be_deleted(
     resp = await client.delete(f"{BASE}/labels/{label_id}", headers=headers)
     assert resp.status_code == 204
     assert (await client.get(f"{BASE}/labels")).json() == []
+
+
+async def test_label_edition_count_and_ordering(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    id_virgin = await _create_label(client, headers, "Virgin")
+    id_emi = await _create_label(client, headers, "EMI")
+
+    # Virgin tiene 2 ediciones, EMI tiene 1.
+    for _ in range(2):
+        r_id = await _create_release(client, headers)
+        await client.post(
+            f"{BASE}/releases/{r_id}/editions",
+            json={**UK_1973_EDITION, "label_id": id_virgin},
+            headers=headers,
+        )
+    r_id = await _create_release(client, headers)
+    await client.post(
+        f"{BASE}/releases/{r_id}/editions",
+        json={**UK_1973_EDITION, "label_id": id_emi},
+        headers=headers,
+    )
+
+    labels = (await client.get(f"{BASE}/labels")).json()
+    assert labels[0]["id"] == id_virgin
+    assert labels[0]["edition_count"] == 2
+    assert labels[1]["id"] == id_emi
+    assert labels[1]["edition_count"] == 1

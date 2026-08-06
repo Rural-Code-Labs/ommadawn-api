@@ -92,8 +92,8 @@ _LABEL_DUPLICATE = {
 async def list_labels(
     q: str | None = Query(default=None, description="Filtra por texto en el nombre"),
     session: AsyncSession = Depends(get_session),
-) -> list[Label]:
-    """Lista los sellos, opcionalmente filtrados por nombre."""
+) -> list[LabelRead]:
+    """Lista los sellos ordenados por numero de ediciones (desc) y nombre (asc)."""
     return await service.list_labels(session, q)
 
 
