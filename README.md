@@ -233,7 +233,7 @@ Discos, recopilatorios, singles, bootlegs y directos se catalogan en cuatro nive
 
 ```
 Release     (la obra abstracta: "Tubular Bells", tipo: studio/compilation/single/bootleg/live)
-  └── Edition   (publicación concreta: país, sello, nº catálogo, fecha, formato, créditos, notas)
+  └── Edition   (publicación concreta: país, Label, nº catálogo, fecha, formato, créditos, notas)
         ├── Track     (aparición de una grabación en ESA edición: posición, disco, cara)
         │     └── Recording  (la grabación real: título, duración, créditos — COMPARTIDA)
         └── Image     (portada, contraportada... con posición reordenable)
@@ -264,6 +264,9 @@ Leer el catálogo es **público**; crear, editar o borrar exige ser **administra
 
 | Método | Ruta | Protegido | Descripción |
 |---|---|---|---|
+| `GET` | `/api/v1/discography/labels` | — | Lista sellos discográficos (filtro `?q=` por nombre) |
+| `POST` | `/api/v1/discography/labels` | 🔒👑 | Crea un sello (nombre único sin distinguir mayúsculas) |
+| `PATCH` / `DELETE` | `/api/v1/discography/labels/{id}` | 🔒👑 | Edita o borra un sello (409 en DELETE si alguna edición lo usa) |
 | `GET` | `/api/v1/discography/recordings` | — | Busca grabaciones por título (`?q=tubular`); cada resultado incluye `usages` con las ediciones donde aparece |
 | `PATCH` | `/api/v1/discography/recordings/{id}` | 🔒👑 | Edita título, duración y/o créditos de una grabación |
 | `DELETE` | `/api/v1/discography/recordings/{id}` | 🔒👑 | Borra una grabación (409 si sigue referenciada por algún track) |

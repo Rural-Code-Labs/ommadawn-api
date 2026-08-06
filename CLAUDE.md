@@ -348,6 +348,8 @@ Endpoints actuales:
 
 | Método | Ruta | Acceso |
 |---|---|---|
+| `GET` | `/api/v1/discography/labels` | Público (filtro `?q=` por nombre) |
+| `POST` / `PATCH` / `DELETE` | `/api/v1/discography/labels[/{id}]` | Admin (409 en DELETE si en uso) |
 | `GET` | `/api/v1/discography/recordings?q=` | Público (búsqueda por título; devuelve `usages` con release_title, edition_name, release_date) |
 | `PATCH` | `/api/v1/discography/recordings/{id}` | Admin |
 | `DELETE` | `/api/v1/discography/recordings/{id}` | Admin (409 si hay tracks que la referencian) |
@@ -366,6 +368,25 @@ body de una edición incluye `tracks`, reemplaza la tracklist entera (se apoya e
 la colección hay que vaciarla y hacer `flush()` **antes** de añadir los temas nuevos, o
 SQLAlchemy puede emitir los `INSERT` antes que los `DELETE` de los viejos y chocar con el
 `UNIQUE(edition_id, position)` cuando se repite un número de pista.
+
+### Sellos discográficos (Label)
+
+`Label` es una entidad propia (`labels`), no un texto libre en `Edition`. Lo motiva poder
+crear/renombrar sellos desde la app y que varias ediciones que pertenecen al mismo sello
+apunten a la misma fila real.
+
+- **Unicidad insensible a mayúsculas**: índice funcional `uq_labels_name_lower` sobre
+  `lower(name)`. Evita que "Virgin" y "virgin" coexistan como sellos distintos. Consecuencia:
+  el 409 en `POST`/`PATCH /labels` compara siempre en minúsculas.
+- **`Edition.label_id`** (FK nullable, `ondelete=RESTRICT`): el sello no siempre se conoce, de
+  ahí que sea opcional. La restricción `RESTRICT` impide borrar un sello que siga siendo
+  referenciado, pero el service lo verifica con un `SELECT` explícito antes de hacer el
+  `DELETE` (no depende del `IntegrityError` de BD, para que el test con SQLite pase igual).
+- **Migración `5677cd83477c`**: crea la tabla `labels`, migra los valores de texto existentes
+  en `editions.label` (agrupando variantes de mayúsculas con `MIN + GROUP BY lower(...)`) y
+  elimina la columna de texto original.
+- `EditionRead.label` es un objeto `LabelRead` anidado (no solo un `id`), para que el cliente
+  iOS reciba nombre y notas sin necesidad de un segundo request.
 
 ### Imágenes (portadas, contraportadas...) y almacenamiento
 
