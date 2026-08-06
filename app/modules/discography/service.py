@@ -282,31 +282,65 @@ async def delete_recording(session: AsyncSession, recording_id: int) -> None:
 
 async def update_recording(
     session: AsyncSession, recording_id: int, data: "RecordingUpdate"
-) -> Recording:
+) -> "RecordingRead":
     """Edita una grabacion. Solo toca los campos presentes en el body (PATCH real)."""
-    recording = await session.get(Recording, recording_id)
+    result = await session.execute(
+        select(Recording)
+        .where(Recording.id == recording_id)
+        .options(*_RECORDING_WITH_USAGES)
+    )
+    recording = result.scalar_one_or_none()
     if recording is None:
         raise recording_not_found_exception
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(recording, field, value)
     await session.commit()
-    await session.refresh(recording)
-    return recording
+    await session.refresh(recording, attribute_names=["tracks"])
+    return _build_recording_read(recording)
 
 
-async def search_recordings(session: AsyncSession, q: str) -> list[Recording]:
+_RECORDING_WITH_USAGES = (
+    selectinload(Recording.tracks)
+    .selectinload(Track.edition)
+    .selectinload(Edition.release),
+)
+
+
+def _build_recording_read(recording: Recording) -> "RecordingRead":
+    """Construye RecordingRead con usages a partir de un Recording cargado."""
+    from app.modules.discography.schemas import RecordingRead, RecordingUsageRead
+
+    return RecordingRead(
+        id=recording.id,
+        title=recording.title,
+        duration_seconds=recording.duration_seconds,
+        credits=recording.credits,
+        usages=[
+            RecordingUsageRead(
+                release_id=track.edition.release.id,
+                release_title=track.edition.release.title,
+                edition_id=track.edition.id,
+                edition_name=track.edition.edition_name,
+                release_date=track.edition.release_date,
+            )
+            for track in recording.tracks
+        ],
+    )
+
+
+async def search_recordings(session: AsyncSession, q: str) -> list["RecordingRead"]:
     """Busca grabaciones por titulo (busqueda parcial, insensible a mayusculas).
 
-    Util para localizar el recording_id de una grabacion existente antes de
-    reutilizarla en otra edicion.
+    Devuelve cada grabacion con la lista de ediciones donde se usa (usages).
     """
     result = await session.execute(
         select(Recording)
         .where(Recording.title.ilike(f"%{q}%"))
+        .options(*_RECORDING_WITH_USAGES)
         .order_by(Recording.title)
         .limit(50)
     )
-    return list(result.scalars().all())
+    return [_build_recording_read(r) for r in result.scalars().all()]
 
 
 # --- Image (portada, contraportada... de una edicion) ----------------------------

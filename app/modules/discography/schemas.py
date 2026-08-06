@@ -166,13 +166,24 @@ class ReleaseUpdate(BaseModel):
 # --- Salida (response) ---------------------------------------------------------
 
 
+class RecordingUsageRead(BaseModel):
+    """Donde aparece una grabacion: la edicion y la obra a la que pertenece."""
+
+    release_id: int
+    release_title: str
+    edition_id: int
+    edition_name: str | None
+    release_date: date | None
+
+
 class RecordingRead(BaseModel):
-    """Vista publica de una grabacion (para el endpoint de busqueda)."""
+    """Vista publica de una grabacion, con la lista de ediciones donde se usa."""
 
     id: int
     title: str
     duration_seconds: int | None
     credits: str | None
+    usages: list[RecordingUsageRead] = []
 
     model_config = {"from_attributes": True}
 

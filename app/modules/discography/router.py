@@ -75,7 +75,7 @@ _IMAGE_TOO_LARGE = {
 async def search_recordings(
     q: str = Query(min_length=1, description="Texto a buscar en el titulo de la grabacion"),
     session: AsyncSession = Depends(get_session),
-) -> list[Recording]:
+) -> list[RecordingRead]:
     """Devuelve las grabaciones cuyo titulo contiene `q` (insensible a mayusculas).
 
     Util para obtener el `recording_id` de una grabacion antes de reutilizarla
@@ -119,7 +119,7 @@ async def update_recording(
     data: RecordingUpdate,
     session: AsyncSession = Depends(get_session),
     _admin: User = Depends(require_admin),
-) -> Recording:
+) -> RecordingRead:
     """Edita los campos presentes en el body (titulo, duracion y/o creditos)."""
     return await service.update_recording(session, recording_id, data)
 
