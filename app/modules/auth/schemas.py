@@ -51,6 +51,16 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
+class GoogleLoginRequest(BaseModel):
+    """Body de POST /auth/google: el ID token que obtiene el SDK de Google en el cliente.
+
+    La API lo verifica contra Google (firma, caducidad, audiencia); no confia en
+    nada de lo que lleve dentro hasta pasar esa verificacion.
+    """
+
+    id_token: str = Field(min_length=1)
+
+
 class UserUpdate(BaseModel):
     """Datos de perfil editables por el propio usuario (body de PATCH /auth/me).
 

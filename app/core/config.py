@@ -41,6 +41,15 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 30
 
+    # --- Login con Google (OAuth) ---
+    # El "Web Client ID" del proyecto en Google Cloud Console. La app iOS (y en
+    # el futuro Android) configura el SDK con `serverClientID` = este mismo
+    # valor, asi que el `aud` del ID token que envian coincide con el, no con
+    # el "iOS Client ID" (ese solo lo usa el SDK para el flujo nativo, la API
+    # nunca lo ve). Un unico Web Client ID sirve como audiencia comun para
+    # cualquier plataforma cliente. Obligatorio: sin valor por defecto.
+    google_web_client_id: str
+
     # Lee variables desde .env; ignora las que no esten declaradas aqui.
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

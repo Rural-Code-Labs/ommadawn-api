@@ -88,6 +88,17 @@ class User(Base):
     # proveedor externo (Google...) no tendra contrasena local.
     hashed_password: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
+    # Identificador estable de la cuenta de Google vinculada (el `sub` del ID
+    # token), no el email: el email puede cambiar en Google, el `sub` no.
+    # Nullable + unique: la mayoria de usuarios (login por contrasena) no
+    # tienen ninguno; el que lo tiene, lo tiene una sola vez (no se puede
+    # vincular la misma cuenta de Google a dos usuarios). No se auto-vincula
+    # nunca a un usuario existente creado por contrasena (ver
+    # service.google_login): si el email ya existe sin este campo, es 409.
+    google_id: Mapped[str | None] = mapped_column(
+        String(255), unique=True, index=True, nullable=True
+    )
+
     # --- Estado / permisos ---
     # Permite desactivar una cuenta sin borrarla (baneos, verificacion de email
     # futura, etc.). El login exigira que este activa.

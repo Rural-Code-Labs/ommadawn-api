@@ -71,3 +71,24 @@ email_taken_exception = HTTPException(
     status_code=status.HTTP_409_CONFLICT,
     detail="El email ya esta registrado",
 )
+
+# 401 -> el ID token de Google no supera la verificacion (firma, caducidad,
+# audiencia distinta al Web Client ID, emisor incorrecto, o email no
+# verificado en la cuenta de Google). Mensaje generico a proposito, mismo
+# criterio que credentials_exception: no da pistas de por que ha fallado.
+invalid_google_token_exception = HTTPException(
+    status_code=status.HTTP_401_UNAUTHORIZED,
+    detail="ID token de Google invalido",
+)
+
+# 409 -> el email del token de Google ya pertenece a un usuario registrado por
+# contrasena (sin Google vinculado). Deliberadamente NO se auto-vincula (seria
+# vincular una cuenta a ciegas solo por coincidir el email) ni se crea un
+# usuario duplicado. El `detail` es un CODIGO corto, no una frase (a
+# diferencia del resto de excepciones de este fichero): la app necesita
+# distinguir este caso de un 401/422 generico por el propio valor del campo,
+# sin tener que parsear un texto humano.
+google_email_conflict_exception = HTTPException(
+    status_code=status.HTTP_409_CONFLICT,
+    detail="email_conflict",
+)

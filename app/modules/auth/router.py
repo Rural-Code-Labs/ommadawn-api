@@ -19,6 +19,7 @@ from app.modules.auth import service
 from app.modules.auth.dependencies import get_current_user, require_superadmin
 from app.modules.auth.models import User
 from app.modules.auth.schemas import (
+    GoogleLoginRequest,
     LoginRequest,
     RefreshRequest,
     TokenPair,
@@ -63,6 +64,18 @@ _SUPERADMIN_REQUIRED = {
     "description": "El usuario esta autenticado pero no es superadministrador",
 }
 _USER_NOT_FOUND = {"model": ErrorMessage, "description": "El usuario no existe"}
+_INVALID_GOOGLE_TOKEN = {
+    "model": ErrorMessage,
+    "description": "El ID token de Google no es valido (firma, caducidad o audiencia incorrecta)",
+}
+_GOOGLE_EMAIL_CONFLICT = {
+    "model": ErrorMessage,
+    "description": (
+        "El email ya pertenece a una cuenta creada por contrasena, sin Google "
+        'vinculado. `detail` es el codigo "email_conflict" (no una frase), '
+        "pensado para que la app lo distinga sin parsear texto."
+    ),
+}
 
 
 @router.post(
@@ -100,6 +113,31 @@ async def login(
 ) -> TokenPair:
     """Valida credenciales (username o email + contrasena) y emite un par de tokens."""
     return await service.login_user(session, data.username_or_email, data.password)
+
+
+@router.post(
+    "/google",
+    response_model=TokenPair,
+    summary="Iniciar sesion o registrarse con Google",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: _INVALID_GOOGLE_TOKEN,
+        status.HTTP_403_FORBIDDEN: _INACTIVE,
+        status.HTTP_409_CONFLICT: _GOOGLE_EMAIL_CONFLICT,
+    },
+)
+async def google_login(
+    data: GoogleLoginRequest,
+    session: AsyncSession = Depends(get_session),
+) -> TokenPair:
+    """Verifica el ID token de Google y emite el mismo par de tokens que /login.
+
+    Si el email no existe todavia, da de alta la cuenta (vinculada desde el
+    primer momento). Si ya existe vinculada a este mismo Google, es un login
+    normal. Si el email existe pero pertenece a una cuenta creada por
+    contrasena sin Google vinculado, responde 409 en vez de vincular a ciegas
+    o crear un duplicado.
+    """
+    return await service.google_login(session, data.id_token)
 
 
 @router.post(

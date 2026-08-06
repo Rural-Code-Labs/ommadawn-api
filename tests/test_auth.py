@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.modules.auth import service
 from app.modules.auth.models import User
 
 BASE = "/api/v1/auth"
@@ -120,6 +121,151 @@ async def test_login_unknown_user_returns_401(client: AsyncClient):
         json={"username_or_email": "fantasma", "password": "loquesea1"},
     )
     assert resp.status_code == 401
+
+
+# --- Login/registro con Google --------------------------------------------------
+#
+# `verify_google_id_token` hace una peticion de red real a Google para validar
+# la firma; en los tests se sustituye (monkeypatch) por un doble que devuelve un
+# payload controlado, igual que se hace con MAX_IMAGE_SIZE_BYTES en el modulo de
+# almacenamiento. El "id_token" que viaja en el body es un valor cualquiera: el
+# doble no lo verifica de verdad, solo hace de puente entre el test y el service.
+
+
+def _google_payload(**overrides) -> dict:
+    payload = {
+        "sub": "google-uid-123",
+        "email": "newuser@gmail.com",
+        "email_verified": True,
+        "name": "New User",
+        "picture": "https://example.com/avatar.jpg",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _mock_google_token(monkeypatch, payload: dict | None = None, *, error: Exception | None = None):
+    """Sustituye verify_google_id_token por un doble que devuelve `payload` (o
+    lanza `error` si se indica, simulando un token invalido)."""
+
+    def fake(token: str) -> dict:
+        if error is not None:
+            raise error
+        return payload if payload is not None else _google_payload()
+
+    monkeypatch.setattr(service, "verify_google_id_token", fake)
+
+
+async def test_google_login_creates_new_user_when_email_unknown(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch
+):
+    _mock_google_token(monkeypatch)
+
+    resp = await client.post(f"{BASE}/google", json={"id_token": "fake-token"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["token_type"] == "bearer"
+    assert body["access_token"] and body["refresh_token"]
+
+    result = await db_session.execute(select(User).where(User.email == "newuser@gmail.com"))
+    user = result.scalar_one()
+    assert user.google_id == "google-uid-123"
+    assert user.username == "newuser"  # derivado de la parte local del email
+    assert user.full_name == "New User"
+    assert user.avatar_url == "https://example.com/avatar.jpg"
+    assert user.hashed_password is None
+    assert user.is_active is True
+
+
+async def test_google_login_existing_linked_user_logs_in_without_duplicating(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch
+):
+    _mock_google_token(monkeypatch)
+
+    first = await client.post(f"{BASE}/google", json={"id_token": "fake-token"})
+    second = await client.post(f"{BASE}/google", json={"id_token": "fake-token"})
+    assert first.status_code == 200
+    assert second.status_code == 200
+    # Refresh tokens distintos (uno nuevo por login), pero UN solo usuario en BD.
+    # El access_token no sirve para esta comprobacion: es un JWT determinista
+    # (mismo sub + misma exp si caen en el mismo segundo), puede coincidir.
+    assert first.json()["refresh_token"] != second.json()["refresh_token"]
+
+    result = await db_session.execute(select(User).where(User.google_id == "google-uid-123"))
+    assert len(result.scalars().all()) == 1
+
+
+async def test_google_login_email_taken_by_password_account_returns_conflict(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch
+):
+    await client.post(f"{BASE}/register", json=CREDS)
+    _mock_google_token(monkeypatch, _google_payload(email=CREDS["email"], sub="google-uid-999"))
+
+    resp = await client.post(f"{BASE}/google", json={"id_token": "fake-token"})
+    assert resp.status_code == 409
+    # `detail` es un codigo corto ("email_conflict"), no una frase: la app lo
+    # distingue por el valor del campo, sin parsear texto.
+    assert resp.json()["detail"] == "email_conflict"
+
+    # No se ha vinculado a ciegas ni se ha creado un duplicado.
+    result = await db_session.execute(select(User).where(User.email == CREDS["email"]))
+    users = result.scalars().all()
+    assert len(users) == 1
+    assert users[0].google_id is None
+
+
+async def test_google_login_invalid_token_returns_401(client: AsyncClient, monkeypatch):
+    _mock_google_token(monkeypatch, error=ValueError("firma invalida"))
+
+    resp = await client.post(f"{BASE}/google", json={"id_token": "fake-token"})
+    assert resp.status_code == 401
+
+
+async def test_google_login_unverified_email_returns_401(client: AsyncClient, monkeypatch):
+    _mock_google_token(monkeypatch, _google_payload(email_verified=False))
+
+    resp = await client.post(f"{BASE}/google", json={"id_token": "fake-token"})
+    assert resp.status_code == 401
+
+
+async def test_google_login_inactive_user_returns_403(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch
+):
+    _mock_google_token(monkeypatch)
+    await client.post(f"{BASE}/google", json={"id_token": "fake-token"})
+
+    result = await db_session.execute(select(User).where(User.google_id == "google-uid-123"))
+    user = result.scalar_one()
+    user.is_active = False
+    await db_session.commit()
+
+    resp = await client.post(f"{BASE}/google", json={"id_token": "fake-token"})
+    assert resp.status_code == 403
+
+
+async def test_google_login_generates_unique_username_on_collision(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch
+):
+    await client.post(
+        f"{BASE}/register",
+        json={
+            "username": "newuser",
+            "email": "newuser@existing.com",
+            "password": "tubular123",
+        },
+    )
+    _mock_google_token(monkeypatch)  # email local part tambien es "newuser"
+
+    resp = await client.post(f"{BASE}/google", json={"id_token": "fake-token"})
+    assert resp.status_code == 200
+
+    result = await db_session.execute(select(User).where(User.google_id == "google-uid-123"))
+    assert result.scalar_one().username == "newuser1"
+
+
+async def test_google_login_rejects_empty_id_token(client: AsyncClient):
+    resp = await client.post(f"{BASE}/google", json={"id_token": ""})
+    assert resp.status_code == 422
 
 
 # --- /me (endpoint protegido) --------------------------------------------------

@@ -23,6 +23,7 @@ es un ciudadano de primera clase: estable y bien versionado.
 | Pydantic v2 + pydantic-settings | Schemas de API y configuración vía `.env` |
 | argon2-cffi | Hashing de contraseñas (argon2id) |
 | PyJWT | Access / refresh tokens |
+| google-auth | Verifica el ID token de Google (login/registro con Google) |
 | PostgreSQL (asyncpg) | Base de datos en **desarrollo** (Docker) y **producción** |
 | SQLite (aiosqlite) | Alternativa rápida en local sin Docker |
 | pytest + pytest-asyncio + httpx | Tests de integración |
@@ -180,6 +181,7 @@ Se manejan **dos tokens con roles distintos**:
 |---|---|---|---|
 | `POST` | `/api/v1/auth/register` | — | Crea un usuario (devuelve el perfil, `201`) |
 | `POST` | `/api/v1/auth/login` | — | Login por username **o** email; devuelve el par de tokens |
+| `POST` | `/api/v1/auth/google` | — | Login/registro con Google (ID token verificado); mismo par de tokens que `/login`. `409` (`detail: "email_conflict"`) si el email ya pertenece a una cuenta por contraseña |
 | `POST` | `/api/v1/auth/refresh` | — | Rota el refresh token y emite un par nuevo |
 | `POST` | `/api/v1/auth/logout` | 🔒 | Revoca el refresh token (`204`) |
 | `GET` | `/api/v1/auth/me` | 🔒 | Devuelve el usuario autenticado |
@@ -195,6 +197,22 @@ BD — no hay endpoint para auto-nombrarse superadmin).
 
 > **Pendiente**: editar `username`/`email`/contraseña sigue sin endpoint (requieren
 > comprobaciones propias de unicidad/verificación no abordadas todavía).
+
+### Login con Google
+
+`POST /auth/google` recibe `{"id_token": "..."}` (el que obtiene el SDK
+`GoogleSignIn` en el cliente) y lo verifica contra Google (firma, caducidad,
+emisor y audiencia = `GOOGLE_WEB_CLIENT_ID`, el mismo Web Client ID que usan
+iOS y, en el futuro, Android como `serverClientID`). Tres casos:
+
+1. **Email nuevo** → crea la cuenta (vinculada desde el alta; `username` se
+   deriva del email, `full_name`/`avatar_url` se rellenan si Google los da).
+2. **Email ya vinculado a esta cuenta de Google** → login normal, mismo par
+   de tokens que `/login`.
+3. **Email ya existe pero se creó por contraseña** → `409` con
+   `{"detail": "email_conflict"}`. No se vincula a ciegas ni se crea un
+   usuario duplicado; la app decide qué ofrecer al usuario a partir de ese
+   código.
 
 ### Flujo: del login al logout
 

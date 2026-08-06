@@ -23,6 +23,8 @@ from datetime import datetime, timedelta, timezone
 import jwt
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerifyMismatchError
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token as google_id_token
 
 from app.core.config import get_settings
 
@@ -124,3 +126,27 @@ def hash_refresh_token(token: str) -> str:
     no el token) evita que quien lea la BD pueda reutilizar los tokens.
     """
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+# --- Login con Google (verificacion de ID token) --------------------------------
+
+
+def verify_google_id_token(token: str) -> dict:
+    """Verifica un ID token de Google (firma, caducidad, emisor y audiencia).
+
+    Llama a Google (descarga y cachea sus claves publicas) para comprobar la
+    firma; no es una funcion "pura" en sentido estricto (hace una peticion de
+    red), pero vive aqui junto al resto de verificacion de tokens porque, igual
+    que `decode_access_token`, es pura VERIFICACION: no toca la base de datos ni
+    sabe nada de HTTP. La audiencia (`aud`) debe ser el Web Client ID (el mismo
+    que usan iOS y, en el futuro, Android como `serverClientID`).
+
+    Devuelve el payload del token (incluye `sub`, `email`, `email_verified`,
+    `name`, `picture`...) si es valido. Lanza `ValueError` o
+    `google.auth.exceptions.GoogleAuthError` si no lo es (firma invalida,
+    caducado, audiencia distinta...); quien llame (el `service` de auth) es
+    responsable de traducirlo a un 401.
+    """
+    return google_id_token.verify_oauth2_token(
+        token, google_requests.Request(), audience=settings.google_web_client_id
+    )

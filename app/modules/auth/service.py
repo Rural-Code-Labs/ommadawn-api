@@ -11,10 +11,12 @@ Recordatorio del diseno:
     token robado deja de servir en cuanto el usuario legitimo renueva.
 """
 
+import re
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from fastapi import HTTPException, status
+from google.auth.exceptions import GoogleAuthError
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,7 +24,9 @@ from app.core.config import get_settings
 from app.core.exceptions import (
     credentials_exception,
     email_taken_exception,
+    google_email_conflict_exception,
     inactive_user_exception,
+    invalid_google_token_exception,
     invalid_refresh_token_exception,
     username_taken_exception,
 )
@@ -31,6 +35,7 @@ from app.core.security import (
     generate_refresh_token,
     hash_password,
     hash_refresh_token,
+    verify_google_id_token,
     verify_password,
 )
 from app.core.storage import StorageBackend, validate_image_upload
@@ -207,6 +212,19 @@ async def register_user(session: AsyncSession, data: UserCreate) -> User:
     return user
 
 
+async def _issue_token_pair(session: AsyncSession, user_id: int) -> TokenPair:
+    """Emite un access token + un refresh token nuevo para un usuario.
+
+    Comun a cualquier flujo de login que ya haya decidido que el usuario esta
+    autenticado (contrasena, Google...): a partir de aqui es siempre lo mismo.
+    """
+    return TokenPair(
+        access_token=create_access_token(user_id),
+        refresh_token=await create_refresh_token(session, user_id),
+        expires_in=ACCESS_TOKEN_EXPIRES_IN,
+    )
+
+
 async def login_user(
     session: AsyncSession, username_or_email: str, password: str
 ) -> TokenPair:
@@ -227,11 +245,85 @@ async def login_user(
     if not user.is_active:
         raise inactive_user_exception
 
-    return TokenPair(
-        access_token=create_access_token(user.id),
-        refresh_token=await create_refresh_token(session, user.id),
-        expires_in=ACCESS_TOKEN_EXPIRES_IN,
-    )
+    return await _issue_token_pair(session, user.id)
+
+
+def _username_from_email(local_part: str) -> str:
+    """Deriva la BASE de un username a partir de la parte local de un email.
+
+    Solo caracteres validos (letras, digitos, guion bajo), en minuscula. No
+    garantiza unicidad: eso lo resuelve `_generate_username_from_email`
+    probando sufijos numericos hasta encontrar uno libre.
+    """
+    base = re.sub(r"[^a-zA-Z0-9_]", "", local_part).lower()
+    if len(base) < 3:
+        base = f"user{base}"
+    return base[:46]  # deja hueco para un sufijo numerico (username <= 50)
+
+
+async def _generate_username_from_email(session: AsyncSession, email: str) -> str:
+    """Genera un username disponible a partir de un email (alta via Google).
+
+    Se usa solo al CREAR una cuenta por Google: el registro por contrasena pide
+    el username explicitamente, pero Google no lo conoce. Prueba la base tal
+    cual y, si ya esta en uso, le anade un sufijo numerico creciente.
+    """
+    base = _username_from_email(email.split("@", 1)[0])
+    candidate = base
+    suffix = 0
+    while await _get_by_username_or_email(session, candidate) is not None:
+        suffix += 1
+        candidate = f"{base}{suffix}"
+    return candidate
+
+
+async def google_login(session: AsyncSession, id_token: str) -> TokenPair:
+    """Login o alta con Google: verifica el ID token y emite el mismo TokenPair
+    que `login_user`. La app no distingue despues si la sesion vino de Google o
+    de contrasena.
+
+    Tres casos, por orden:
+      1. Ya existe un usuario con este `google_id` -> login normal.
+      2. No existe por `google_id` pero SI por email -> esa cuenta se creo por
+         contrasena y no esta vinculada. NO se auto-vincula (seria vincular a
+         ciegas solo por coincidir el email) ni se crea un duplicado: 409
+         (`google_email_conflict_exception`).
+      3. No existe ni por `google_id` ni por email -> alta nueva, vinculada
+         desde el primer momento.
+    """
+    try:
+        payload = verify_google_id_token(id_token)
+    except (ValueError, GoogleAuthError):
+        raise invalid_google_token_exception
+
+    email = payload.get("email")
+    if not email or not payload.get("email_verified"):
+        raise invalid_google_token_exception
+    google_id = payload["sub"]
+
+    result = await session.execute(select(User).where(User.google_id == google_id))
+    user = result.scalar_one_or_none()
+
+    if user is None:
+        existing = await _get_by_username_or_email(session, email)
+        if existing is not None:
+            raise google_email_conflict_exception
+
+        user = User(
+            username=await _generate_username_from_email(session, email),
+            email=email,
+            full_name=payload.get("name"),
+            avatar_url=payload.get("picture"),
+            google_id=google_id,
+        )
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+
+    if not user.is_active:
+        raise inactive_user_exception
+
+    return await _issue_token_pair(session, user.id)
 
 
 async def refresh_tokens(session: AsyncSession, refresh_token: str) -> TokenPair:

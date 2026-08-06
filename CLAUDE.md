@@ -51,6 +51,10 @@ mantenerse estable y bien versionado.
   `admin` (`GET`/`PATCH /auth/users...`). Ninguno de los dos roles (`is_admin`,
   `is_super_admin`) tiene forma de auto-asignarse por API: **verificado con un test** que
   registrarse con esos campos en el body no escala privilegios (Pydantic los ignora).
+- **Login/registro con Google (ver sección "Login con Google" más abajo)**: `POST
+  /auth/google` recibe el ID token que obtiene el SDK `GoogleSignIn` en el cliente, lo
+  verifica contra Google, y emite el MISMO `TokenPair` que `/auth/login` — la app no
+  distingue después si la sesión vino de contraseña o de Google.
 
 ---
 
@@ -65,6 +69,7 @@ mantenerse estable y bien versionado.
 | Pydantic v2 + pydantic-settings | Schemas de API y configuración vía `.env` |
 | argon2-cffi | Hashing de contraseñas (argon2id) |
 | PyJWT | Access / refresh tokens |
+| google-auth | Verifica el ID token de Google (`POST /auth/google`) |
 | PostgreSQL (asyncpg) | Base de datos en **desarrollo** (Docker) y **producción** |
 | SQLite (aiosqlite) | Alternativa rápida en local (sin instalar nada) |
 | pytest + pytest-asyncio + httpx | Tests de integración |
@@ -238,6 +243,58 @@ avatar, y un rol de **superadministrador** que decide quién es `admin`.
   de cuando `is_admin` se creó en la migración inicial, con la tabla recién creada y vacía.
   Sin ese `server_default`, Postgres no sabe qué poner en las filas existentes y la migración
   falla.
+
+---
+
+## Login con Google
+
+`POST /auth/google` (tarea 5.1.1 del backlog): la app iOS (SDK `GoogleSignIn-iOS`) obtiene un
+ID token de Google y se lo manda a la API; la API lo verifica y emite el MISMO `TokenPair`
+que `POST /auth/login` — la app no distingue después si la sesión vino de contraseña o de
+Google.
+
+- **`google_web_client_id`** (`Settings`, obligatorio, sin valor por defecto — mismo criterio
+  que `secret_key`): es el "Web Client ID" del proyecto en Google Cloud Console (*Rural Code
+  Labs*), y es la **audiencia** (`aud`) contra la que se valida el ID token. La app iOS
+  configura el SDK con `serverClientID` = este mismo valor (no el "iOS Client ID", que solo
+  usa el SDK para el flujo nativo y la API nunca ve). Un único Web Client ID sirve de audiencia
+  común para cualquier plataforma cliente futura (Android incluido). No es un secreto (va
+  incrustado en apps públicas), pero se configura por `.env` igual que el resto: cambiar de
+  proyecto de Google no debe tocar código.
+- **`app/core/security.py::verify_google_id_token`**: verifica firma, caducidad, emisor y
+  audiencia llamando a Google (`google.oauth2.id_token.verify_oauth2_token`), usando el paquete
+  `google-auth[requests]` (el extra `[requests]` hace falta: `google.auth.transport.requests`
+  importa la librería `requests`, que NO es una dependencia transitiva de `google-auth` a
+  secas). Vive junto al resto de verificación de tokens en `security.py` porque, igual que
+  `decode_access_token`, es pura VERIFICACIÓN — no toca BD ni sabe de HTTP — aunque a
+  diferencia de esa, sí hace una petición de red (a los certificados públicos de Google).
+- **`User.google_id`** (nullable, unique, indexado): el `sub` del ID token (identificador
+  estable de la cuenta de Google), NO el email — el email puede cambiar en Google, el `sub`
+  no. La mayoría de usuarios (login por contraseña) lo tienen a `None`.
+- **Lógica en `service.google_login`, tres casos**:
+  1. Ya existe un usuario con ese `google_id` → login normal (mismo flujo que `login_user`
+     desde ahí en adelante, factorizado en el helper común `_issue_token_pair`).
+  2. No existe por `google_id` pero SÍ por email → esa cuenta se creó por contraseña y no
+     tiene Google vinculado. **Decisión explícita: no se auto-vincula ni se crea un
+     duplicado.** Responde `409` con `{"detail": "email_conflict"}`.
+  3. No existe ni por `google_id` ni por email → alta nueva, vinculada desde el primer
+     momento; `full_name`/`avatar_url` se rellenan con `name`/`picture` del token si vienen
+     (no es bloqueante si no vienen). El `username` no lo da Google: se deriva de la parte
+     local del email (`_generate_username_from_email`), probando sufijos numéricos
+     (`nombre`, `nombre1`, `nombre2`...) hasta encontrar uno libre.
+- **`email_conflict` es un CÓDIGO, no una frase** — única excepción al resto de
+  `app/core/exceptions.py`, donde `detail` siempre es texto humano en español. Decisión
+  explícita del usuario: la app necesita distinguir este 409 de cualquier otro por el propio
+  valor del campo, sin parsear un mensaje.
+- **`email_verified` del token se exige `True`**: si Google no ha verificado el email (caso
+  raro, pero posible con algunos proveedores federados detrás de Google), se trata igual que
+  un token inválido (`401`), no se confía en un email sin verificar para vincular/crear cuenta.
+- **Tests** (`tests/test_auth.py`): `verify_google_id_token` hace una petición de red real, así
+  que en los tests se sustituye por un doble (`monkeypatch.setattr(service,
+  "verify_google_id_token", fake)`) que devuelve un payload controlado o lanza el error que se
+  quiera simular — mismo patrón que `MAX_IMAGE_SIZE_BYTES` en los tests de avatar/imágenes.
+- **Vinculación/desvinculación desde perfil** (`POST`/`DELETE /auth/me/google`) queda como
+  tarea posterior: no forma parte de este endpoint.
 
 ---
 
