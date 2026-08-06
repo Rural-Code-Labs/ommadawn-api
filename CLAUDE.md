@@ -302,8 +302,35 @@ Google.
   quiera simular — mismo patrón que `MAX_IMAGE_SIZE_BYTES` en los tests de avatar/imágenes.
   Para probar el reintento por colisión de username se mockea `service.secrets.randbelow` con
   una secuencia fija de valores.
-- **Vinculación/desvinculación desde perfil** (`POST`/`DELETE /auth/me/google`) queda como
-  tarea posterior: no forma parte de este endpoint.
+- **Vinculación/desvinculación desde perfil** (`POST`/`DELETE /auth/me/google`, tarea 5.3 del
+  backlog): ver sección propia "Vincular/desvincular Google desde el perfil" más abajo.
+
+### Vincular/desvincular Google desde el perfil
+
+`POST`/`DELETE /auth/me/google` operan sobre una sesión YA AUTENTICADA (por contraseña o por
+Google) — a diferencia de `POST /auth/google`, esto no es un login: el usuario viene de
+`get_current_user`, no del token.
+
+- **`service.link_google_account`**: verifica el ID token igual que `google_login` (firma,
+  audiencia, `email_verified`), pero NO busca por email ni da de alta a nadie — el usuario ya
+  existe (`current_user`). Solo comprueba que el `google_id` del token no pertenezca YA a otra
+  fila (`User.google_id == google_id AND User.id != current_user.id`) antes de guardarlo. No
+  toca `email` ni `username`: vincular es estrictamente añadir el `google_id`.
+  - **`google_already_linked_exception`** (`409`, `detail: "google_already_linked"`, mismo
+    criterio de código corto que `email_conflict`/`username_already_set`): dos usuarios no
+    pueden compartir la misma cuenta de Google. Si el `google_id` ya es el del propio
+    `current_user` (re-vincular la misma cuenta), no hay conflicto — es un no-op.
+- **`service.unlink_google_account`**: pone `google_id=None`. Bloqueado
+  (`google_only_access_exception`, `409`, `detail: "google_only_access"`) si
+  `hashed_password is None` — esa cuenta se creó puramente por Google (ver `google_login` caso
+  3) y desvincular la dejaría sin NINGUNA forma de volver a entrar. **No pide reautenticarse
+  con contraseña antes** (decisión explícita del backlog): se confía en que la sesión Bearer ya
+  demuestra que es el dueño de la cuenta, mismo criterio que el resto de `PATCH`/`DELETE
+  /me...` (perfil, avatar). Si el usuario no tenía Google vinculado, es idempotente (mismo
+  criterio que `delete_avatar`): no falla, simplemente no cambia nada.
+- **Tests**: reutilizan `_mock_google_token`/`_google_payload` ya existentes de
+  `google_login`. El caso de conflicto se prueba vinculando la misma cuenta de Google (mismo
+  `sub` de `_google_payload`) desde DOS usuarios distintos.
 
 ### Username provisional (altas por Google)
 

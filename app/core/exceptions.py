@@ -104,3 +104,22 @@ username_already_set_exception = HTTPException(
     status_code=status.HTTP_409_CONFLICT,
     detail="username_already_set",
 )
+
+# 409 -> POST /auth/me/google: la cuenta de Google del ID token (su `sub`) ya
+# esta vinculada a OTRO usuario. Igual que con el email en el login (no se
+# auto-vincula a ciegas), aqui tampoco se permite que dos usuarios compartan
+# la misma cuenta de Google. Mismo criterio de CODIGO corto que el resto de
+# conflictos de Google/username en este fichero.
+google_already_linked_exception = HTTPException(
+    status_code=status.HTTP_409_CONFLICT,
+    detail="google_already_linked",
+)
+
+# 409 -> DELETE /auth/me/google: el usuario no tiene contrasena
+# (`hashed_password is None`), es decir, Google es su UNICA forma de entrar.
+# Desvincular lo dejaria sin ninguna manera de autenticarse. Mismo criterio de
+# CODIGO corto.
+google_only_access_exception = HTTPException(
+    status_code=status.HTTP_409_CONFLICT,
+    detail="google_only_access",
+)

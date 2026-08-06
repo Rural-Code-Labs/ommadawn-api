@@ -188,6 +188,8 @@ Se manejan **dos tokens con roles distintos**:
 | `PATCH` | `/api/v1/auth/me` | 🔒 | Edita `full_name`, `country` (ISO 3166-1 alpha-2), `city`, `birth_date`, `theme_preference` (solo los campos enviados); `username` solo si `username_is_default` es `true` (ver más abajo) |
 | `POST` | `/api/v1/auth/me/avatar` | 🔒 | Sube (o sustituye) el avatar (`multipart/form-data`) |
 | `DELETE` | `/api/v1/auth/me/avatar` | 🔒 | Borra el avatar (idempotente) |
+| `POST` | `/api/v1/auth/me/google` | 🔒 | Vincula una cuenta de Google a la sesión actual. `409` (`detail: "google_already_linked"`) si esa cuenta ya la usa otro usuario |
+| `DELETE` | `/api/v1/auth/me/google` | 🔒 | Desvincula Google. `409` (`detail: "google_only_access"`) si es la única forma de acceso (sin contraseña) |
 | `GET` | `/api/v1/auth/users` | 🔒👑 | Lista todos los usuarios |
 | `PATCH` | `/api/v1/auth/users/{id}` | 🔒👑 | Cambia si otro usuario es `admin` |
 
@@ -232,6 +234,23 @@ registró por contraseña (siempre `false` desde el alta) o porque ya gastó su
 único cambio — un intento de tocar `username` responde `409` con
 `{"detail": "username_already_set"}`, un código corto y distinguible, no un
 422 genérico ni un cambio ignorado en silencio.
+
+#### Vincular/desvincular Google desde el perfil
+
+Con una sesión ya iniciada (por contraseña o por Google), `POST`/`DELETE
+/auth/me/google` gestionan el vínculo sin pasar por un login:
+
+- **`POST /auth/me/google`** recibe `{"id_token": "..."}` (mismo shape que
+  `/auth/google`), lo verifica igual, y vincula esa cuenta al usuario
+  autenticado. No toca `email` ni `username`. Si esa cuenta de Google ya la
+  tiene vinculada OTRO usuario → `409` con
+  `{"detail": "google_already_linked"}` (dos usuarios no pueden compartir la
+  misma cuenta de Google).
+- **`DELETE /auth/me/google`** quita el vínculo. Si el usuario no tiene
+  contraseña (`hashed_password` es `null` — Google es su única forma de
+  entrar), desvincular lo dejaría sin acceso: `409` con
+  `{"detail": "google_only_access"}`. No exige reautenticarse con contraseña
+  antes de desvincular: se confía en que la sesión ya está autenticada.
 
 ### Flujo: del login al logout
 

@@ -287,6 +287,115 @@ async def test_google_login_rejects_empty_id_token(client: AsyncClient):
     assert resp.status_code == 422
 
 
+# --- Vincular/desvincular Google desde el perfil (sesion ya autenticada) -------
+
+
+async def test_link_google_requires_authentication(client: AsyncClient, monkeypatch):
+    _mock_google_token(monkeypatch)
+    resp = await client.post(f"{BASE}/me/google", json={"id_token": "fake-token"})
+    assert resp.status_code == 401
+
+
+async def test_link_google_adds_google_to_password_account(
+    client: AsyncClient, db_session: AsyncSession, monkeypatch
+):
+    tokens = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    me_before = (await client.get(f"{BASE}/me", headers=headers)).json()
+    assert me_before["has_google"] is False
+
+    _mock_google_token(monkeypatch)
+    resp = await client.post(
+        f"{BASE}/me/google", json={"id_token": "fake-token"}, headers=headers
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["has_google"] is True
+    # email/username no se tocan al vincular.
+    assert body["username"] == CREDS["username"]
+    assert body["email"] == CREDS["email"]
+
+    result = await db_session.execute(
+        select(User).where(User.username == CREDS["username"])
+    )
+    assert result.scalar_one().google_id == "google-uid-123"
+
+
+async def test_link_google_already_linked_to_another_user_returns_409(
+    client: AsyncClient, monkeypatch
+):
+    # "belen" ya vincula esa cuenta de Google (mismo sub que _google_payload).
+    _mock_google_token(monkeypatch)
+    await client.post(f"{BASE}/google", json={"id_token": "fake-token"})
+
+    # Un segundo usuario, por contrasena, intenta vincular la MISMA cuenta.
+    await client.post(
+        f"{BASE}/register",
+        json={
+            "username": "otro",
+            "email": "otro@correo.com",
+            "password": "tubular123",
+        },
+    )
+    login = await client.post(
+        f"{BASE}/login", json={"username_or_email": "otro", "password": "tubular123"}
+    )
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    resp = await client.post(
+        f"{BASE}/me/google", json={"id_token": "fake-token"}, headers=headers
+    )
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "google_already_linked"
+
+
+async def test_link_google_invalid_token_returns_401(client: AsyncClient, monkeypatch):
+    tokens = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    _mock_google_token(monkeypatch, error=ValueError("firma invalida"))
+    resp = await client.post(
+        f"{BASE}/me/google", json={"id_token": "fake-token"}, headers=headers
+    )
+    assert resp.status_code == 401
+
+
+async def test_unlink_google_requires_authentication(client: AsyncClient):
+    resp = await client.delete(f"{BASE}/me/google")
+    assert resp.status_code == 401
+
+
+async def test_unlink_google_removes_it_when_password_exists(
+    client: AsyncClient, monkeypatch
+):
+    tokens = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    _mock_google_token(monkeypatch)
+    await client.post(f"{BASE}/me/google", json={"id_token": "fake-token"}, headers=headers)
+
+    resp = await client.delete(f"{BASE}/me/google", headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["has_google"] is False
+
+
+async def test_unlink_google_rejects_when_it_is_the_only_access(
+    client: AsyncClient, monkeypatch
+):
+    # Cuenta creada PURAMENTE por Google: sin contrasena.
+    _mock_google_token(monkeypatch)
+    tokens = (await client.post(f"{BASE}/google", json={"id_token": "fake-token"})).json()
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    resp = await client.delete(f"{BASE}/me/google", headers=headers)
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "google_only_access"
+
+    me = await client.get(f"{BASE}/me", headers=headers)
+    assert me.json()["has_google"] is True  # no se toco
+
+
 # --- /me (endpoint protegido) --------------------------------------------------
 
 

@@ -24,7 +24,9 @@ from app.core.config import get_settings
 from app.core.exceptions import (
     credentials_exception,
     email_taken_exception,
+    google_already_linked_exception,
     google_email_conflict_exception,
+    google_only_access_exception,
     inactive_user_exception,
     invalid_google_token_exception,
     invalid_refresh_token_exception,
@@ -434,6 +436,52 @@ async def update_profile(session: AsyncSession, user: User, data: UserUpdate) ->
     for field, value in updates.items():
         setattr(user, field, value)
 
+    await session.commit()
+    await session.refresh(user)
+    return user
+
+
+async def link_google_account(session: AsyncSession, user: User, id_token: str) -> User:
+    """Vincula una cuenta de Google al usuario YA AUTENTICADO (no es un login).
+
+    Verifica el ID token igual que `google_login`, pero aqui el usuario ya se
+    conoce (viene de la sesion, no del token): no hay alta ni busqueda por
+    email, solo comprobar que ese `google_id` no pertenezca YA a otra cuenta
+    (dos usuarios no pueden compartir la misma cuenta de Google) antes de
+    guardarlo. No toca `email` ni `username`.
+    """
+    try:
+        payload = verify_google_id_token(id_token)
+    except (ValueError, GoogleAuthError):
+        raise invalid_google_token_exception
+
+    if not payload.get("email") or not payload.get("email_verified"):
+        raise invalid_google_token_exception
+    google_id = payload["sub"]
+
+    result = await session.execute(select(User).where(User.google_id == google_id))
+    existing = result.scalar_one_or_none()
+    if existing is not None and existing.id != user.id:
+        raise google_already_linked_exception
+
+    user.google_id = google_id
+    await session.commit()
+    await session.refresh(user)
+    return user
+
+
+async def unlink_google_account(session: AsyncSession, user: User) -> User:
+    """Desvincula la cuenta de Google del usuario autenticado.
+
+    Bloqueado si Google es su UNICA forma de acceso (`hashed_password is
+    None`): desvincular lo dejaria sin ninguna manera de volver a entrar. No
+    exige reautenticarse con contrasena antes: se confia en que la sesion ya
+    esta autenticada (mismo criterio que el resto de `PATCH`/`DELETE /me...`).
+    """
+    if user.hashed_password is None:
+        raise google_only_access_exception
+
+    user.google_id = None
     await session.commit()
     await session.refresh(user)
     return user

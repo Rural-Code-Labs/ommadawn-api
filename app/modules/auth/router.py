@@ -85,6 +85,21 @@ _USERNAME_CONFLICT = {
         "unico cambio permitido)."
     ),
 }
+_GOOGLE_ALREADY_LINKED = {
+    "model": ErrorMessage,
+    "description": (
+        'Esa cuenta de Google ya esta vinculada a OTRO usuario. `detail` es el '
+        'codigo "google_already_linked" (no una frase).'
+    ),
+}
+_GOOGLE_ONLY_ACCESS = {
+    "model": ErrorMessage,
+    "description": (
+        "El usuario no tiene contrasena: Google es su UNICA forma de entrar, no "
+        'se puede desvincular. `detail` es el codigo "google_only_access" (no '
+        "una frase)."
+    ),
+}
 
 
 @router.post(
@@ -258,6 +273,44 @@ async def delete_avatar(
 ) -> User:
     """Borra el avatar del usuario autenticado (si tenia uno)."""
     return await service.delete_avatar(session, storage, current_user)
+
+
+@router.post(
+    "/me/google",
+    response_model=UserRead,
+    summary="Vincular una cuenta de Google al usuario autenticado",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: _NO_AUTH,
+        status.HTTP_409_CONFLICT: _GOOGLE_ALREADY_LINKED,
+    },
+)
+async def link_google_account(
+    data: GoogleLoginRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> User:
+    """Verifica el ID token y vincula esa cuenta de Google al usuario ya
+    autenticado (no es un login: el usuario viene de la sesion, no del token).
+    No toca `email` ni `username`."""
+    return await service.link_google_account(session, current_user, data.id_token)
+
+
+@router.delete(
+    "/me/google",
+    response_model=UserRead,
+    summary="Desvincular la cuenta de Google del usuario autenticado",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: _NO_AUTH,
+        status.HTTP_409_CONFLICT: _GOOGLE_ONLY_ACCESS,
+    },
+)
+async def unlink_google_account(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> User:
+    """Desvincula Google del usuario autenticado. Rechaza si es su UNICA forma
+    de acceso (sin contrasena, quedaria sin poder volver a entrar)."""
+    return await service.unlink_google_account(session, current_user)
 
 
 # --- Administracion de usuarios (requiere SUPERadministrador) ---------------------
