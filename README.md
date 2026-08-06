@@ -264,7 +264,7 @@ Leer el catálogo es **público**; crear, editar o borrar exige ser **administra
 
 | Método | Ruta | Protegido | Descripción |
 |---|---|---|---|
-| `GET` | `/api/v1/discography/recordings` | — | Busca grabaciones por título (`?q=tubular`) para obtener su `recording_id` y reutilizarlas |
+| `GET` | `/api/v1/discography/recordings` | — | Busca grabaciones por título (`?q=tubular`); cada resultado incluye `usages` con las ediciones donde aparece |
 | `PATCH` | `/api/v1/discography/recordings/{id}` | 🔒👑 | Edita título, duración y/o créditos de una grabación |
 | `DELETE` | `/api/v1/discography/recordings/{id}` | 🔒👑 | Borra una grabación (409 si sigue referenciada por algún track) |
 | `GET` | `/api/v1/discography/releases` | — | Lista obras (filtro opcional `?type=studio\|compilation\|single\|bootleg\|live`) |

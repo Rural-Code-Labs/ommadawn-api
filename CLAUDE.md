@@ -309,7 +309,10 @@ Decisiones de diseño fijadas (para no repensarlas en cada fase futura):
   parciales (uno cuando `side IS NULL`, otro cuando `side IS NOT NULL`) porque PostgreSQL trata
   NULL≠NULL en restricciones UNIQUE, lo que dejaría pasar duplicados con `side=NULL` si fuera
   un único índice. `GET /discography/recordings?q=...` permite buscar por título para localizar
-  el `recording_id` antes de reutilizar. La FK `Track.recording_id` usa `ondelete=RESTRICT`
+  el `recording_id` antes de reutilizar; cada resultado incluye `usages` con la lista de
+  ediciones donde aparece (`release_title`, `edition_name`, `release_date`). El service
+  construye el DTO manualmente (`_build_recording_read`) cargando `Recording → tracks →
+  edition → release` con `selectinload`. La FK `Track.recording_id` usa `ondelete=RESTRICT`
   para que borrar una `Recording` falle si sigue siendo referenciada — protección de datos.
 - **Cadena vacía → null en campos de texto opcionales**: `edition_name` (y cualquier campo
   similar en el futuro) tiene un `field_validator(mode="before")` que convierte `""` a `None`.
@@ -330,7 +333,7 @@ Endpoints actuales:
 
 | Método | Ruta | Acceso |
 |---|---|---|
-| `GET` | `/api/v1/discography/recordings?q=` | Público (búsqueda de grabaciones por título) |
+| `GET` | `/api/v1/discography/recordings?q=` | Público (búsqueda por título; devuelve `usages` con release_title, edition_name, release_date) |
 | `PATCH` | `/api/v1/discography/recordings/{id}` | Admin |
 | `DELETE` | `/api/v1/discography/recordings/{id}` | Admin (409 si hay tracks que la referencian) |
 | `GET` | `/api/v1/discography/releases` | Público (filtro `?type=`) |
