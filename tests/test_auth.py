@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.core.exceptions import credentials_exception
 from app.modules.auth import service
 from app.modules.auth.models import User
 
@@ -394,6 +395,115 @@ async def test_unlink_google_rejects_when_it_is_the_only_access(
 
     me = await client.get(f"{BASE}/me", headers=headers)
     assert me.json()["has_google"] is True  # no se toco
+
+
+# --- Cambiar contrasena (o establecerla por primera vez) -----------------------
+
+
+async def test_change_password_requires_authentication(client: AsyncClient):
+    resp = await client.post(
+        f"{BASE}/me/password",
+        json={"current_password": "tubular123", "new_password": "nuevacontra1"},
+    )
+    assert resp.status_code == 401
+
+
+async def test_change_password_with_correct_current_password(client: AsyncClient):
+    tokens = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    resp = await client.post(
+        f"{BASE}/me/password",
+        json={"current_password": CREDS["password"], "new_password": "nuevacontra1"},
+        headers=headers,
+    )
+    assert resp.status_code == 204
+
+    # La contrasena vieja ya no sirve; la nueva si.
+    old = await client.post(
+        f"{BASE}/login",
+        json={"username_or_email": CREDS["username"], "password": CREDS["password"]},
+    )
+    assert old.status_code == 401
+    new = await client.post(
+        f"{BASE}/login",
+        json={"username_or_email": CREDS["username"], "password": "nuevacontra1"},
+    )
+    assert new.status_code == 200
+
+
+async def test_change_password_with_wrong_current_password_returns_401(
+    client: AsyncClient,
+):
+    tokens = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    resp = await client.post(
+        f"{BASE}/me/password",
+        json={"current_password": "incorrecta", "new_password": "nuevacontra1"},
+        headers=headers,
+    )
+    assert resp.status_code == 401
+    # Detail propio, distinto del de sesion caducada/token invalido.
+    assert resp.json()["detail"] != credentials_exception.detail
+
+    # No ha cambiado nada: la contrasena vieja sigue sirviendo.
+    still_old = await client.post(
+        f"{BASE}/login",
+        json={"username_or_email": CREDS["username"], "password": CREDS["password"]},
+    )
+    assert still_old.status_code == 200
+
+
+async def test_change_password_without_current_password_returns_401(
+    client: AsyncClient,
+):
+    tokens = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    resp = await client.post(
+        f"{BASE}/me/password",
+        json={"new_password": "nuevacontra1"},
+        headers=headers,
+    )
+    assert resp.status_code == 401
+
+
+async def test_change_password_rejects_too_short_new_password(client: AsyncClient):
+    tokens = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    resp = await client.post(
+        f"{BASE}/me/password",
+        json={"current_password": CREDS["password"], "new_password": "corta"},
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
+async def test_google_only_account_can_set_a_password_for_the_first_time(
+    client: AsyncClient, monkeypatch
+):
+    # Cuenta creada PURAMENTE por Google: hashed_password es None.
+    _mock_google_token(monkeypatch)
+    tokens = (await client.post(f"{BASE}/google", json={"id_token": "fake-token"})).json()
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    # Sin current_password: no hay nada que verificar todavia.
+    resp = await client.post(
+        f"{BASE}/me/password",
+        json={"new_password": "primeracontra1"},
+        headers=headers,
+    )
+    assert resp.status_code == 204
+
+    # Ahora la cuenta tambien entra por contrasena.
+    me = (await client.get(f"{BASE}/me", headers=headers)).json()
+    login = await client.post(
+        f"{BASE}/login",
+        json={"username_or_email": me["username"], "password": "primeracontra1"},
+    )
+    assert login.status_code == 200
 
 
 # --- /me (endpoint protegido) --------------------------------------------------

@@ -123,3 +123,15 @@ google_only_access_exception = HTTPException(
     status_code=status.HTTP_409_CONFLICT,
     detail="google_only_access",
 )
+
+# 401 -> POST /auth/me/password: la cuenta YA tiene contrasena y la
+# `current_password` enviada no coincide. Deliberadamente NO reutiliza
+# `credentials_exception`: si reutilizara el mismo objeto (mismo status,
+# mismo detail, misma cabecera), la app no podria distinguir esto de una
+# sesion caducada (ambos serian un 401 identico). Con un `detail` propio en
+# prosa (no un codigo: aqui no hace falta, es el UNICO motivo de 401 posible
+# en este endpoint una vez pasado el Bearer) la distincion es automatica.
+invalid_current_password_exception = HTTPException(
+    status_code=status.HTTP_401_UNAUTHORIZED,
+    detail="La contrasena actual no es correcta",
+)

@@ -61,6 +61,21 @@ class GoogleLoginRequest(BaseModel):
     id_token: str = Field(min_length=1)
 
 
+class PasswordUpdate(BaseModel):
+    """Body de POST /auth/me/password: cambia (o pone por primera vez) la contrasena.
+
+    `current_password` es OPCIONAL a nivel de schema: si la cuenta ya tiene una
+    contrasena, es obligatoria y debe coincidir (lo valida el `service`, no
+    Pydantic — depende del estado en BD, no de la forma del body). Si la
+    cuenta se creo puramente por Google (`hashed_password is None`), no hay
+    nada que verificar: se ignora si llega, y esto es la forma de que esa
+    cuenta deje de depender solo de Google para entrar.
+    """
+
+    current_password: str | None = None
+    new_password: str = Field(min_length=8, max_length=128)
+
+
 class UserUpdate(BaseModel):
     """Datos de perfil editables por el propio usuario (body de PATCH /auth/me).
 

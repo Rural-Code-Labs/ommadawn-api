@@ -21,6 +21,7 @@ from app.modules.auth.models import User
 from app.modules.auth.schemas import (
     GoogleLoginRequest,
     LoginRequest,
+    PasswordUpdate,
     RefreshRequest,
     TokenPair,
     UserAdminUpdate,
@@ -98,6 +99,15 @@ _GOOGLE_ONLY_ACCESS = {
         "El usuario no tiene contrasena: Google es su UNICA forma de entrar, no "
         'se puede desvincular. `detail` es el codigo "google_only_access" (no '
         "una frase)."
+    ),
+}
+_INVALID_CURRENT_PASSWORD = {
+    "model": ErrorMessage,
+    "description": (
+        "Falta el access token o no es valido, O (si la cuenta ya tenia "
+        "contrasena) `current_password` no coincide con la actual. Un `detail` "
+        "propio (no el mismo que credenciales de login) para que la app pueda "
+        "distinguirlo de una sesion caducada."
     ),
 }
 
@@ -311,6 +321,26 @@ async def unlink_google_account(
     """Desvincula Google del usuario autenticado. Rechaza si es su UNICA forma
     de acceso (sin contrasena, quedaria sin poder volver a entrar)."""
     return await service.unlink_google_account(session, current_user)
+
+
+@router.post(
+    "/me/password",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Cambiar la contrasena (o establecerla por primera vez)",
+    responses={status.HTTP_401_UNAUTHORIZED: _INVALID_CURRENT_PASSWORD},
+)
+async def change_password(
+    data: PasswordUpdate,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Cambia la contrasena del usuario autenticado.
+
+    Si la cuenta ya tenia una, `current_password` es obligatoria y debe
+    coincidir. Si la cuenta se creo puramente por Google (sin contrasena),
+    `current_password` no hace falta: esta es la forma de ponerle una por
+    primera vez."""
+    await service.change_password(session, current_user, data)
 
 
 # --- Administracion de usuarios (requiere SUPERadministrador) ---------------------

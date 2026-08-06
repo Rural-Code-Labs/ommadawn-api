@@ -190,6 +190,7 @@ Se manejan **dos tokens con roles distintos**:
 | `DELETE` | `/api/v1/auth/me/avatar` | 🔒 | Borra el avatar (idempotente) |
 | `POST` | `/api/v1/auth/me/google` | 🔒 | Vincula una cuenta de Google a la sesión actual. `409` (`detail: "google_already_linked"`) si esa cuenta ya la usa otro usuario |
 | `DELETE` | `/api/v1/auth/me/google` | 🔒 | Desvincula Google. `409` (`detail: "google_only_access"`) si es la única forma de acceso (sin contraseña) |
+| `POST` | `/api/v1/auth/me/password` | 🔒 | Cambia la contraseña (o la establece por primera vez si la cuenta se creó solo por Google); `204` |
 | `GET` | `/api/v1/auth/users` | 🔒👑 | Lista todos los usuarios |
 | `PATCH` | `/api/v1/auth/users/{id}` | 🔒👑 | Cambia si otro usuario es `admin` |
 
@@ -251,6 +252,20 @@ Con una sesión ya iniciada (por contraseña o por Google), `POST`/`DELETE
   entrar), desvincular lo dejaría sin acceso: `409` con
   `{"detail": "google_only_access"}`. No exige reautenticarse con contraseña
   antes de desvincular: se confía en que la sesión ya está autenticada.
+
+#### Cambiar contraseña (o ponerla por primera vez)
+
+`POST /auth/me/password` recibe `{"current_password": "...", "new_password":
+"..."}` (`new_password` con las mismas reglas que en el registro: 8-128
+caracteres) y responde `204`:
+
+- Si la cuenta **ya tiene** contraseña, `current_password` es obligatoria y
+  debe coincidir; si no, `401` con un mensaje propio, distinto del de sesión
+  caducada, para que la app pueda diferenciarlos.
+- Si la cuenta **se creó solo por Google** (`hashed_password` es `null`),
+  `current_password` no hace falta — se ignora si se envía. Es la forma de
+  que esa cuenta deje de depender únicamente de Google para entrar: a partir
+  de ahí también puede hacer login por contraseña.
 
 ### Flujo: del login al logout
 

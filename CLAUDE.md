@@ -332,6 +332,37 @@ Google) — a diferencia de `POST /auth/google`, esto no es un login: el usuario
   `google_login`. El caso de conflicto se prueba vinculando la misma cuenta de Google (mismo
   `sub` de `_google_payload`) desde DOS usuarios distintos.
 
+### Cambiar contraseña (o ponerla por primera vez)
+
+`POST /auth/me/password` cubre DOS casos con la misma lógica en `service.change_password`, sin
+un flag explícito en el body — se decide según el estado real de la cuenta:
+
+- **La cuenta ya tiene contraseña** (`hashed_password` no es `None`): `current_password` es
+  obligatoria y se verifica con `verify_password` — el MISMO mecanismo que usa `login_user`
+  para comprobar credenciales. Si no coincide (o no se envía), `invalid_current_password_exception`
+  (`401`).
+- **La cuenta se creó puramente por Google** (`hashed_password is None`, ver `google_login`
+  caso 3): no hay nada que verificar. `current_password` se ignora si llega — el `service` ni
+  la mira. Se hashea `new_password` y se guarda directamente. Es la forma de que esa cuenta
+  deje de depender solo de Google: a partir de ahí también puede hacer `login_user` normal.
+- **`invalid_current_password_exception` NO reutiliza `credentials_exception`** pese a ser
+  también un `401`: si compartieran el mismo objeto (mismo status, mismo `detail`, misma
+  cabecera `WWW-Authenticate`), la app no podría distinguir "contraseña actual incorrecta" de
+  "sesión caducada" (`get_current_user` también lanza `credentials_exception` en `401` si el
+  Bearer no es válido). Con un `detail` propio en PROSA (no un código corto: aquí no hace falta
+  — es el único motivo de `401` posible una vez pasado el Bearer, a diferencia de
+  `email_conflict`/`username_already_set`/`google_already_linked`, donde el mismo status podía
+  significar varias cosas) la distinción es automática.
+- **`PasswordUpdate.current_password` es `str | None`** (no `Field(min_length=...)` como
+  `new_password`): la validación de si hace falta o no depende del ESTADO EN BD
+  (`hashed_password`), no de la forma del body, así que Pydantic no puede decidirlo — lo valida
+  el `service`.
+- **Sin migración**: no toca el modelo, solo reescribe `User.hashed_password` (columna ya
+  existente, nullable desde el principio — pensada para OAuth desde antes de que existiera
+  Google login).
+- Respuesta `204 No Content`: no hay nada nuevo que enseñar (a diferencia de
+  `update_profile`/`link_google_account`, que devuelven `UserRead`).
+
 ### Username provisional (altas por Google)
 
 Una cuenta creada por `POST /auth/google` no elige su `username` en el momento del alta (a

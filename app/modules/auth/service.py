@@ -28,6 +28,7 @@ from app.core.exceptions import (
     google_email_conflict_exception,
     google_only_access_exception,
     inactive_user_exception,
+    invalid_current_password_exception,
     invalid_google_token_exception,
     invalid_refresh_token_exception,
     username_already_set_exception,
@@ -43,7 +44,7 @@ from app.core.security import (
 )
 from app.core.storage import StorageBackend, validate_image_upload
 from app.modules.auth.models import RefreshToken, User
-from app.modules.auth.schemas import TokenPair, UserCreate, UserUpdate
+from app.modules.auth.schemas import PasswordUpdate, TokenPair, UserCreate, UserUpdate
 
 settings = get_settings()
 
@@ -485,6 +486,30 @@ async def unlink_google_account(session: AsyncSession, user: User) -> User:
     await session.commit()
     await session.refresh(user)
     return user
+
+
+async def change_password(session: AsyncSession, user: User, data: PasswordUpdate) -> None:
+    """Cambia la contrasena del usuario autenticado, o la establece por
+    primera vez si la cuenta se creo puramente por Google.
+
+    Si `hashed_password` YA existe: exige `current_password` y que coincida
+    con el hash guardado (mismo mecanismo de verificacion que `login_user`,
+    via `verify_password`); si no coincide (o no se envio), 401
+    (`invalid_current_password_exception`). Si `hashed_password` es `None`
+    (cuenta creada solo por Google): no hay nada que verificar, se ignora
+    `current_password` si llega y se establece la nueva directamente — es la
+    forma de que esa cuenta deje de depender solo de Google para entrar.
+
+    No devuelve nada (`204 No Content`): no hay estado nuevo que enseñar.
+    """
+    if user.hashed_password is not None:
+        if not data.current_password or not verify_password(
+            data.current_password, user.hashed_password
+        ):
+            raise invalid_current_password_exception
+
+    user.hashed_password = hash_password(data.new_password)
+    await session.commit()
 
 
 # --- Administracion de usuarios (superadmin) --------------------------------------
