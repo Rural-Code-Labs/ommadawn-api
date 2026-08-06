@@ -135,3 +135,13 @@ invalid_current_password_exception = HTTPException(
     status_code=status.HTTP_401_UNAUTHORIZED,
     detail="La contrasena actual no es correcta",
 )
+
+# 409 -> DELETE /auth/me/password: la cuenta no tiene Google vinculado
+# (`google_id is None`), es decir, la contrasena es su UNICA forma de entrar.
+# Quitarla la dejaria sin ninguna manera de autenticarse. Espejo exacto de
+# `google_only_access_exception` (que bloquea desvincular Google cuando no
+# hay contrasena); mismo criterio de CODIGO corto.
+password_only_access_exception = HTTPException(
+    status_code=status.HTTP_409_CONFLICT,
+    detail="password_only_access",
+)

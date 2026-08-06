@@ -367,6 +367,23 @@ un flag explícito en el body — se decide según el estado real de la cuenta:
 - Respuesta `204 No Content`: no hay nada nuevo que enseñar (a diferencia de
   `update_profile`/`link_google_account`, que devuelven `UserRead`).
 
+`DELETE /auth/me/password` (tarea 5.4 del backlog) es el ESPEJO exacto de `DELETE
+/auth/me/google`, con los roles de Google/contraseña invertidos:
+
+- **`service.remove_password`**: bloqueado (`password_only_access_exception`, `409`,
+  `detail: "password_only_access"`) si `google_id is None` — sin Google vinculado, quitar la
+  contraseña dejaría la cuenta sin NINGUNA forma de entrar. Si hay Google vinculado, pone
+  `hashed_password=None` directamente. Misma estructura que `unlink_google_account`
+  (`google_only_access_exception` si `hashed_password is None`), con la condición cambiada.
+- **No pide `current_password` para quitarla** ni reautenticación previa — mismo criterio que
+  el resto de `PATCH`/`DELETE /me...`: se confía en que la sesión Bearer ya demuestra quién es
+  el dueño de la cuenta.
+- **No es idempotente** como `delete_avatar`/`unlink_google_account` sin Google vinculado: si
+  la cuenta YA no tenía contraseña, seguiría sin Google → seguiría dando `409`. La única forma
+  de "no-op" sería no tener Google Y no tener contraseña, estado que no puede existir (algún
+  método de acceso siempre queda).
+- Sin migración: mismo motivo que `change_password`, reescribe una columna ya existente.
+
 ### Username provisional (altas por Google)
 
 Una cuenta creada por `POST /auth/google` no elige su `username` en el momento del alta (a

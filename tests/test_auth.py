@@ -509,6 +509,51 @@ async def test_google_only_account_can_set_a_password_for_the_first_time(
     assert login.status_code == 200
 
 
+# --- Quitar contrasena (volver a depender solo de Google) ----------------------
+
+
+async def test_remove_password_requires_authentication(client: AsyncClient):
+    resp = await client.delete(f"{BASE}/me/password")
+    assert resp.status_code == 401
+
+
+async def test_remove_password_rejects_when_no_google_linked(client: AsyncClient):
+    # Cuenta registrada por contrasena, sin Google: seria su UNICA forma de entrar.
+    tokens = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    resp = await client.delete(f"{BASE}/me/password", headers=headers)
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "password_only_access"
+
+    me = await client.get(f"{BASE}/me", headers=headers)
+    assert me.json()["has_password"] is True  # no se toco
+
+
+async def test_remove_password_succeeds_when_google_linked(
+    client: AsyncClient, monkeypatch
+):
+    tokens = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    _mock_google_token(monkeypatch)
+    await client.post(f"{BASE}/me/google", json={"id_token": "fake-token"}, headers=headers)
+
+    resp = await client.delete(f"{BASE}/me/password", headers=headers)
+    assert resp.status_code == 204
+
+    me = await client.get(f"{BASE}/me", headers=headers)
+    assert me.json()["has_password"] is False
+    assert me.json()["has_google"] is True
+
+    # La contrasena vieja ya no sirve para entrar.
+    login = await client.post(
+        f"{BASE}/login",
+        json={"username_or_email": CREDS["username"], "password": CREDS["password"]},
+    )
+    assert login.status_code == 401
+
+
 # --- /me (endpoint protegido) --------------------------------------------------
 
 

@@ -31,6 +31,7 @@ from app.core.exceptions import (
     invalid_current_password_exception,
     invalid_google_token_exception,
     invalid_refresh_token_exception,
+    password_only_access_exception,
     username_already_set_exception,
     username_taken_exception,
 )
@@ -509,6 +510,21 @@ async def change_password(session: AsyncSession, user: User, data: PasswordUpdat
             raise invalid_current_password_exception
 
     user.hashed_password = hash_password(data.new_password)
+    await session.commit()
+
+
+async def remove_password(session: AsyncSession, user: User) -> None:
+    """Quita la contrasena del usuario autenticado: vuelve a depender solo de
+    Google para entrar. Espejo exacto de `unlink_google_account`.
+
+    Bloqueado (`password_only_access_exception`, `409`) si `google_id is
+    None`: sin contrasena NI Google, la cuenta se quedaria sin ninguna forma
+    de autenticarse.
+    """
+    if user.google_id is None:
+        raise password_only_access_exception
+
+    user.hashed_password = None
     await session.commit()
 
 

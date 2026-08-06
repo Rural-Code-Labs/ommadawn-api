@@ -110,6 +110,14 @@ _INVALID_CURRENT_PASSWORD = {
         "distinguirlo de una sesion caducada."
     ),
 }
+_PASSWORD_ONLY_ACCESS = {
+    "model": ErrorMessage,
+    "description": (
+        "La cuenta no tiene Google vinculado: la contrasena es su UNICA forma "
+        'de entrar, no se puede quitar. `detail` es el codigo '
+        '"password_only_access" (no una frase).'
+    ),
+}
 
 
 @router.post(
@@ -341,6 +349,24 @@ async def change_password(
     `current_password` no hace falta: esta es la forma de ponerle una por
     primera vez."""
     await service.change_password(session, current_user, data)
+
+
+@router.delete(
+    "/me/password",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Quitar la contrasena (volver a depender solo de Google)",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: _NO_AUTH,
+        status.HTTP_409_CONFLICT: _PASSWORD_ONLY_ACCESS,
+    },
+)
+async def remove_password(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Quita la contrasena del usuario autenticado. Rechaza si la cuenta no
+    tiene Google vinculado (quedaria sin ninguna forma de acceder)."""
+    await service.remove_password(session, current_user)
 
 
 # --- Administracion de usuarios (requiere SUPERadministrador) ---------------------

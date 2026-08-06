@@ -191,6 +191,7 @@ Se manejan **dos tokens con roles distintos**:
 | `POST` | `/api/v1/auth/me/google` | 🔒 | Vincula una cuenta de Google a la sesión actual. `409` (`detail: "google_already_linked"`) si esa cuenta ya la usa otro usuario |
 | `DELETE` | `/api/v1/auth/me/google` | 🔒 | Desvincula Google. `409` (`detail: "google_only_access"`) si es la única forma de acceso (sin contraseña) |
 | `POST` | `/api/v1/auth/me/password` | 🔒 | Cambia la contraseña (o la establece por primera vez si la cuenta se creó solo por Google); `204` |
+| `DELETE` | `/api/v1/auth/me/password` | 🔒 | Quita la contraseña (vuelve a depender solo de Google). `409` (`detail: "password_only_access"`) si no hay Google vinculado |
 | `GET` | `/api/v1/auth/users` | 🔒👑 | Lista todos los usuarios |
 | `PATCH` | `/api/v1/auth/users/{id}` | 🔒👑 | Cambia si otro usuario es `admin` |
 
@@ -269,6 +270,11 @@ caracteres) y responde `204`:
   `current_password` no hace falta — se ignora si se envía. Es la forma de
   que esa cuenta deje de depender únicamente de Google para entrar: a partir
   de ahí también puede hacer login por contraseña.
+
+`DELETE /auth/me/password` es el espejo: quita la contraseña y la cuenta
+vuelve a depender solo de Google. Rechaza con `409` y
+`{"detail": "password_only_access"}` si no hay Google vinculado (`google_id`
+es `null`) — sin eso, la cuenta se quedaría sin ninguna forma de entrar.
 
 ### Flujo: del login al logout
 
