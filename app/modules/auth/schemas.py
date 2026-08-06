@@ -122,6 +122,7 @@ class UserRead(BaseModel):
     birth_date: date | None
     avatar_url: str | None
     theme_preference: ThemePreference
+    has_google: bool
     is_active: bool
     is_admin: bool
     is_super_admin: bool

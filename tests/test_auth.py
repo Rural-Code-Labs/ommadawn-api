@@ -48,6 +48,7 @@ async def test_register_creates_user_without_leaking_password(client: AsyncClien
     assert body["email"] == "mike@oldfield.com"
     assert body["is_active"] is True
     assert body["is_admin"] is False
+    assert body["has_google"] is False
     # Lo mas importante: la contrasena (ni su hash) NUNCA sale por la API.
     assert "password" not in body
     assert "hashed_password" not in body
@@ -175,6 +176,12 @@ async def test_google_login_creates_new_user_when_email_unknown(
     assert user.avatar_url == "https://example.com/avatar.jpg"
     assert user.hashed_password is None
     assert user.is_active is True
+
+    # /me refleja has_google=True para una cuenta creada via Google.
+    me = await client.get(
+        f"{BASE}/me", headers={"Authorization": f"Bearer {body['access_token']}"}
+    )
+    assert me.json()["has_google"] is True
 
 
 async def test_google_login_existing_linked_user_logs_in_without_duplicating(

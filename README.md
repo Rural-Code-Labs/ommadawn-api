@@ -214,6 +214,10 @@ iOS y, en el futuro, Android como `serverClientID`). Tres casos:
    usuario duplicado; la app decide qué ofrecer al usuario a partir de ese
    código.
 
+`UserRead` (la respuesta de `/register` y `/me`) incluye `has_google: bool`
+(`google_id is not None`), para que la app sepa si la cuenta tiene Google
+vinculado sin depender de heurísticas.
+
 ### Flujo: del login al logout
 
 ```mermaid

@@ -132,6 +132,12 @@ class User(Base):
         nullable=False,
     )
 
+    # Propiedad calculada (no columna): la usa UserRead con from_attributes=True
+    # sin necesitar guardar un booleano redundante con google_id en BD.
+    @property
+    def has_google(self) -> bool:
+        return self.google_id is not None
+
     def __repr__(self) -> str:
         # Representacion util para depurar. Nunca incluimos la contrasena.
         return f"<User id={self.id} username={self.username!r}>"
