@@ -1002,3 +1002,352 @@ async def test_label_edition_count_and_ordering(
     assert labels[0]["edition_count"] == 2
     assert labels[1]["id"] == id_emi
     assert labels[1]["edition_count"] == 1
+
+
+# --- Collection (agrupa ediciones de OBRAS DISTINTAS bajo un nombre comun) -------
+
+
+async def _create_release_with_edition(
+    client: AsyncClient, headers: dict, *, title: str, release_date: str | None = None
+) -> tuple[int, int]:
+    """Helper: crea una obra + una edicion minima con la fecha indicada.
+    Devuelve (release_id, edition_id). Distinto de
+    `_create_release_and_edition`: cada llamada usa una obra NUEVA (con su
+    propio titulo), justo lo que necesitan las colecciones (ediciones de
+    obras distintas), a diferencia de anadir varias ediciones a la MISMA obra."""
+    release_resp = await client.post(
+        f"{BASE}/releases",
+        json={"title": title, "release_type": "studio"},
+        headers=headers,
+    )
+    release_id = release_resp.json()["id"]
+    edition_resp = await client.post(
+        f"{BASE}/releases/{release_id}/editions",
+        json={"release_date": release_date},
+        headers=headers,
+    )
+    return release_id, edition_resp.json()["id"]
+
+
+async def _create_collection(
+    client: AsyncClient, headers: dict, name: str = "Remasterizaciones HDCD"
+) -> int:
+    resp = await client.post(f"{BASE}/collections", json={"name": name}, headers=headers)
+    assert resp.status_code == 201
+    return resp.json()["id"]
+
+
+async def _upload_front_cover(
+    client: AsyncClient, release_id: int, edition_id: int, headers: dict
+) -> str:
+    """Helper: sube una portada front_cover minima y devuelve su URL."""
+    tiny_png = (
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+        b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00"
+        b"\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05\x18"
+        b"\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+    resp = await client.post(
+        f"{BASE}/releases/{release_id}/editions/{edition_id}/images",
+        files={"file": ("cover.png", tiny_png, "image/png")},
+        data={"image_type": "front_cover"},
+        headers=headers,
+    )
+    assert resp.status_code == 201
+    return resp.json()["url"]
+
+
+async def test_list_collections_starts_empty(client: AsyncClient):
+    resp = await client.get(f"{BASE}/collections")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+async def test_create_collection_requires_authentication(client: AsyncClient):
+    resp = await client.post(f"{BASE}/collections", json={"name": "x"})
+    assert resp.status_code == 401
+
+
+async def test_create_collection_requires_admin(
+    client: AsyncClient, db_session: AsyncSession
+):
+    await client.post(f"{AUTH_BASE}/register", json=FAN_CREDS)
+    headers = await _login(client, FAN_CREDS["username"], FAN_CREDS["password"])
+
+    resp = await client.post(f"{BASE}/collections", json={"name": "x"}, headers=headers)
+    assert resp.status_code == 403
+
+
+async def test_admin_can_create_collection(client: AsyncClient, db_session: AsyncSession):
+    headers = await _admin_headers(client, db_session)
+
+    resp = await client.post(
+        f"{BASE}/collections",
+        json={"name": "Remasterizaciones HDCD", "description": "Reediciones HDCD de 2016"},
+        headers=headers,
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["name"] == "Remasterizaciones HDCD"
+    assert body["description"] == "Reediciones HDCD de 2016"
+    assert body["editions"] == []
+
+
+async def test_create_collection_duplicate_name_returns_409(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    await _create_collection(client, headers, "HDCD")
+
+    resp = await client.post(
+        f"{BASE}/collections", json={"name": "HDCD"}, headers=headers
+    )
+    assert resp.status_code == 409
+
+
+async def test_get_unknown_collection_returns_404(client: AsyncClient):
+    resp = await client.get(f"{BASE}/collections/999")
+    assert resp.status_code == 404
+
+
+async def test_add_edition_to_collection(client: AsyncClient, db_session: AsyncSession):
+    headers = await _admin_headers(client, db_session)
+    collection_id = await _create_collection(client, headers)
+    _, edition_id = await _create_release_with_edition(
+        client, headers, title="Tubular Bells"
+    )
+
+    resp = await client.post(
+        f"{BASE}/collections/{collection_id}/editions",
+        json={"edition_id": edition_id},
+        headers=headers,
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert len(body["editions"]) == 1
+    assert body["editions"][0]["id"] == edition_id
+    assert body["editions"][0]["release_title"] == "Tubular Bells"
+
+
+async def test_add_edition_to_collection_is_idempotent(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    collection_id = await _create_collection(client, headers)
+    _, edition_id = await _create_release_with_edition(
+        client, headers, title="Tubular Bells"
+    )
+
+    first = await client.post(
+        f"{BASE}/collections/{collection_id}/editions",
+        json={"edition_id": edition_id},
+        headers=headers,
+    )
+    second = await client.post(
+        f"{BASE}/collections/{collection_id}/editions",
+        json={"edition_id": edition_id},
+        headers=headers,
+    )
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert len(second.json()["editions"]) == 1  # no duplicada
+
+
+async def test_add_edition_to_unknown_collection_returns_404(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    _, edition_id = await _create_release_with_edition(
+        client, headers, title="Tubular Bells"
+    )
+
+    resp = await client.post(
+        f"{BASE}/collections/999/editions",
+        json={"edition_id": edition_id},
+        headers=headers,
+    )
+    assert resp.status_code == 404
+
+
+async def test_add_unknown_edition_to_collection_returns_404(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    collection_id = await _create_collection(client, headers)
+
+    resp = await client.post(
+        f"{BASE}/collections/{collection_id}/editions",
+        json={"edition_id": 999},
+        headers=headers,
+    )
+    assert resp.status_code == 404
+
+
+async def test_remove_edition_from_collection(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    collection_id = await _create_collection(client, headers)
+    _, edition_id = await _create_release_with_edition(
+        client, headers, title="Tubular Bells"
+    )
+    await client.post(
+        f"{BASE}/collections/{collection_id}/editions",
+        json={"edition_id": edition_id},
+        headers=headers,
+    )
+
+    resp = await client.delete(
+        f"{BASE}/collections/{collection_id}/editions/{edition_id}", headers=headers
+    )
+    assert resp.status_code == 204
+
+    detail = await client.get(f"{BASE}/collections/{collection_id}")
+    assert detail.json()["editions"] == []
+
+
+async def test_remove_edition_not_in_collection_returns_404(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    collection_id = await _create_collection(client, headers)
+    _, edition_id = await _create_release_with_edition(
+        client, headers, title="Tubular Bells"
+    )
+
+    resp = await client.delete(
+        f"{BASE}/collections/{collection_id}/editions/{edition_id}", headers=headers
+    )
+    assert resp.status_code == 404
+
+
+async def test_delete_collection_with_editions_returns_409(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    collection_id = await _create_collection(client, headers)
+    _, edition_id = await _create_release_with_edition(
+        client, headers, title="Tubular Bells"
+    )
+    await client.post(
+        f"{BASE}/collections/{collection_id}/editions",
+        json={"edition_id": edition_id},
+        headers=headers,
+    )
+
+    resp = await client.delete(f"{BASE}/collections/{collection_id}", headers=headers)
+    assert resp.status_code == 409
+
+
+async def test_delete_empty_collection_succeeds(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    collection_id = await _create_collection(client, headers)
+
+    resp = await client.delete(f"{BASE}/collections/{collection_id}", headers=headers)
+    assert resp.status_code == 204
+    assert (await client.get(f"{BASE}/collections/{collection_id}")).status_code == 404
+
+
+async def test_collection_detail_orders_editions_by_release_date_nulls_last(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    collection_id = await _create_collection(client, headers)
+
+    _, edition_no_date = await _create_release_with_edition(
+        client, headers, title="Sin fecha", release_date=None
+    )
+    _, edition_2016 = await _create_release_with_edition(
+        client, headers, title="Segunda", release_date="2016-01-01"
+    )
+    _, edition_1973 = await _create_release_with_edition(
+        client, headers, title="Primera", release_date="1973-05-25"
+    )
+
+    for edition_id in (edition_no_date, edition_2016, edition_1973):
+        await client.post(
+            f"{BASE}/collections/{collection_id}/editions",
+            json={"edition_id": edition_id},
+            headers=headers,
+        )
+
+    detail = (await client.get(f"{BASE}/collections/{collection_id}")).json()
+    ordered_ids = [e["id"] for e in detail["editions"]]
+    assert ordered_ids == [edition_1973, edition_2016, edition_no_date]
+
+
+async def test_collection_detail_includes_release_info_and_cover(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    collection_id = await _create_collection(client, headers)
+    release_id, edition_id = await _create_release_with_edition(
+        client, headers, title="Tubular Bells", release_date="1973-05-25"
+    )
+    cover_url = await _upload_front_cover(client, release_id, edition_id, headers)
+    await client.post(
+        f"{BASE}/collections/{collection_id}/editions",
+        json={"edition_id": edition_id},
+        headers=headers,
+    )
+
+    detail = (await client.get(f"{BASE}/collections/{collection_id}")).json()
+    row = detail["editions"][0]
+    assert row["release_id"] == release_id
+    assert row["release_title"] == "Tubular Bells"
+    assert row["release_type"] == "studio"
+    assert row["release_date"] == "1973-05-25"
+    assert row["cover_url"] == cover_url
+
+
+async def test_collection_list_edition_count_and_sample_covers(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    collection_id = await _create_collection(client, headers)
+
+    release_a, edition_a = await _create_release_with_edition(
+        client, headers, title="Album A", release_date="1973-05-25"
+    )
+    cover_a = await _upload_front_cover(client, release_a, edition_a, headers)
+    # Segunda edicion SIN portada: no debe aparecer en sample_cover_urls.
+    _, edition_b = await _create_release_with_edition(
+        client, headers, title="Album B", release_date="1974-08-28"
+    )
+
+    for edition_id in (edition_a, edition_b):
+        await client.post(
+            f"{BASE}/collections/{collection_id}/editions",
+            json={"edition_id": edition_id},
+            headers=headers,
+        )
+
+    listing = (await client.get(f"{BASE}/collections")).json()
+    assert len(listing) == 1
+    assert listing[0]["id"] == collection_id
+    assert listing[0]["edition_count"] == 2
+    assert listing[0]["sample_cover_urls"] == [cover_a]
+
+
+async def test_removing_edition_does_not_delete_it(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    collection_id = await _create_collection(client, headers)
+    release_id, edition_id = await _create_release_with_edition(
+        client, headers, title="Tubular Bells"
+    )
+    await client.post(
+        f"{BASE}/collections/{collection_id}/editions",
+        json={"edition_id": edition_id},
+        headers=headers,
+    )
+    await client.delete(
+        f"{BASE}/collections/{collection_id}/editions/{edition_id}", headers=headers
+    )
+
+    release = await client.get(f"{BASE}/releases/{release_id}")
+    assert release.status_code == 200
+    assert release.json()["editions"][0]["id"] == edition_id

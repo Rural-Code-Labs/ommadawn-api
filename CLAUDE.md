@@ -37,7 +37,9 @@ mantenerse estable y bien versionado.
 - **Progreso**: **Fases 1–4 (bloque de auth) cerradas** ✅. **Fase 5 (Discografía) en
   marcha**: modelo `Release`/`Track` + endpoints de discos ya funcionando (ver tabla de
   fases y sección "Discografía" más abajo). Quedan recopilatorios/singles/bootlegs por
-  poblar con datos reales y, más adelante, "directos" como tipo nuevo.
+  poblar con datos reales y, más adelante, "directos" como tipo nuevo. **Fase 6
+  (Colecciones de ediciones) cerrada** ✅: `Collection` agrupa ediciones de obras
+  distintas bajo un nombre común (ver sección "Colecciones de ediciones" más abajo).
 - **Base de datos en desarrollo = PostgreSQL local en Docker** (`docker compose up -d`),
   el mismo motor que en producción. SQLite queda como alternativa rápida (línea comentada
   en `.env` / `.env.example`).
@@ -156,11 +158,11 @@ ommadawn-api/
 │       │   ├── dependencies.py # get_current_user, require_admin (protegen endpoints)
 │       │   └── router.py       # /api/v1/auth/*
 │       ├── discography/        # 🚧 Fase 5 en marcha (Release -> Edition -> Track/Image)
-│       │   ├── models.py       # Release, Edition (is_primary), Track, Image (ImageType)
+│       │   ├── models.py       # Release, Edition (is_primary), Track, Image, Collection
 │       │   ├── schemas.py      # Release/Edition/Track/Image: Create, Read, Update
 │       │   ├── service.py      # CRUD anidado + demotes (primary, portada) + subida
 │       │   └── router.py       # /api/v1/discography/* (leer: público; escribir: admin)
-│       └── concerts/           # Fase 6 (futuro)
+│       └── concerts/           # Fase 7 (futuro)
 ├── migrations/                 # Alembic: env.py (async) + versions/
 ├── tests/                      # Tests de integración por módulo (conftest.py, test_auth.py)
 ├── docker-compose.yml          # PostgreSQL local para desarrollo
@@ -736,6 +738,57 @@ guarda los bytes**, solo la URL que devuelve el backend de almacenamiento al sub
   una carpeta temporal de pytest, no a la carpeta real de desarrollo (`./media`, en
   `.gitignore`).
 
+### Colecciones de ediciones (Fase 6)
+
+`Collection` (`/api/v1/discography/collections`, migración `904b404a095b`) agrupa ediciones de
+**obras distintas** bajo un nombre común (p. ej. "Remasterizaciones HDCD": la edición HDCD de
+*Tubular Bells*, la de *Hergest Ridge*... cada una en su propio `Release`). **No** es una caja
+física de varios discos del MISMO álbum — eso ya es una `Edition` normal (o un `Release` tipo
+`compilation`); una `Collection` es un agrupamiento TRANSVERSAL para navegación en la app, sin
+país/sello/fecha/formato propios.
+
+- **`collection_editions` es una `Table` de Core, NO una clase ORM** — a diferencia de
+  `Track`/`Recording` (que sí necesitan una clase porque `Track` guarda datos propios:
+  posición, disco, cara). Aquí no hay NINGÚN campo extra: el orden dentro de una colección se
+  calcula siempre a partir de `Edition.release_date` (cronológico), nunca se guarda una
+  posición manual. Clave primaria compuesta `(collection_id, edition_id)`, ambas FK
+  `ondelete=CASCADE`.
+- **`Edition.collections` (relación inversa) SIN `cascade="all, delete-orphan"`** — a
+  diferencia de `tracks`/`images` en `Edition`, que sí son propiedad exclusiva de la edición y
+  se borran con ella. Borrar una `Edition` no debe borrar la(s) `Collection`(s) a las que
+  pertenece, solo la fila puente (de eso ya se encarga el `ondelete=CASCADE` de la FK en
+  `collection_editions`).
+- **Orden "las sin fecha, al final"**: `_sorted_by_release_date` usa como clave
+  `(release_date is None, release_date)` en vez de confiar en el `ORDER BY` de cada motor —
+  PostgreSQL pone los `NULL` al final en `ASC` por defecto, SQLite los pone al principio;
+  ordenar en Python con esa clave da el mismo resultado en dev (SQLite) y producción
+  (PostgreSQL) sin depender del comportamiento de cada motor. La tupla nunca compara `None`
+  contra una fecha real directamente: dentro de cada grupo (`True`/`False`) los valores son
+  homogéneos.
+- **`GET /collections` construye `sample_cover_urls` tomando las 3 primeras ediciones por
+  fecha y quedándose con las que SÍ tienen `front_cover`** (busca en `Edition.images`, mismo
+  criterio de "primera imagen `front_cover`" que usa `Image` en el resto del módulo) — si
+  alguna de esas 3 no tiene portada, se omite sin más: la lista puede salir con menos de 3
+  elementos, o vacía. No se sigue buscando más allá de esas 3 para "rellenar el hueco".
+- **`GET /collections/{id}` construye el DTO manualmente** (`_build_collection_detail_read`,
+  mismo patrón que `_build_recording_read` para `RecordingRead.usages`): cada
+  `CollectionEditionRead` mezcla campos de `Edition` con `release_id`/`release_title`/
+  `release_type` de su `Release` — no se puede hacer con `from_attributes=True` directo porque
+  la forma no coincide con ningún modelo ORM tal cual.
+- **`POST .../editions` es IDEMPOTENTE** (decisión propia, no especificada explícitamente en el
+  backlog): añadir una edición que ya estaba en la colección no es un error, simplemente no
+  hace nada — encaja con el uso esperado en la app (un botón "añadir a colección" tipo toggle),
+  y evita inventar un código de conflicto para un caso que no es realmente un conflicto de
+  datos. **`DELETE .../editions/{edition_id}` SÍ da 404** si esa edición no estaba en la
+  colección — aquí sí hay un caso claro de "esto no existe", mismo criterio que
+  `image_not_found_exception` para un sub-recurso bajo un padre.
+- **Nombre único, `unique=True` simple** (no el índice funcional insensible a mayúsculas que
+  usa `Label`): el backlog no señaló el mismo riesgo de variantes de capitalización que llevó
+  a esa decisión en `Label`, así que no se añadió la complejidad extra sin que se pidiera.
+- **Crear una colección reutiliza el patrón de `Label`** (`session.add` + `commit` +
+  capturar `IntegrityError` del `UNIQUE` de BD → 409), no un `SELECT` previo por nombre: más
+  robusto ante condiciones de carrera que buscar-antes-de-insertar.
+
 ---
 
 ## Entorno de preproducción
@@ -780,8 +833,9 @@ solo sirve de referencia de estilo) y se reparte en varias fases:
 | **Fase 3 — Flujo de tokens** | Access token + refresh token con rotación, hashing de contraseñas (argon2), seguridad JWT. | ✅ Hecha |
 | **Fase 4 — Endpoints de auth** | `register`, `login`, `refresh`, `logout`, `me` + tests de integración. Cierra el bloque de auth. | ✅ Hecha |
 | **Fase 5 — Discografía** | Discos (álbumes de estudio), recopilatorios, singles, bootlegs, directos… y sus temas/pistas. | 🚧 En marcha (modelo + endpoints de discos listos; falta poblar y añadir "directo") |
-| **Fase 6 — Conciertos** | Giras, fechas, salas, setlists. | Pendiente |
-| **Fase 7 — Libros** | Bibliografía relacionada. | Pendiente |
+| **Fase 6 — Colecciones de ediciones** | Agrupar ediciones de obras distintas bajo un nombre común (p. ej. "Remasterizaciones HDCD"), navegable desde `/discography/collections`. | ✅ Hecha |
+| **Fase 7 — Conciertos** | Giras, fechas, salas, setlists. | Pendiente |
+| **Fase 8 — Libros** | Bibliografía relacionada. | Pendiente |
 | **Fases siguientes** | Otras secciones a acordar con el usuario. | Pendiente |
 
 ---

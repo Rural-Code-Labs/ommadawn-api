@@ -17,6 +17,7 @@ from datetime import date, datetime
 
 from sqlalchemy import (
     Boolean,
+    Column,
     Date,
     DateTime,
     Enum,
@@ -24,6 +25,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    Table,
     Text,
     func,
     text,
@@ -162,6 +164,66 @@ class Label(Base):
         return f"<Label id={self.id} name={self.name!r}>"
 
 
+# Tabla puente `collections` <-> `editions` (muchos-a-muchos), SIN campo de
+# orden propio: el orden dentro de una coleccion se calcula siempre a partir
+# de `Edition.release_date` (cronologico), nunca se guarda una posicion manual
+# aqui. Por eso es una `Table` de Core (sin columnas propias mas alla de las
+# dos FK), no una clase ORM como `Track` -- a diferencia de Track/Recording,
+# aqui no hay NINGUN dato adicional que colgar de la relacion.
+collection_editions = Table(
+    "collection_editions",
+    Base.metadata,
+    Column(
+        "collection_id",
+        ForeignKey("collections.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "edition_id", ForeignKey("editions.id", ondelete="CASCADE"), primary_key=True
+    ),
+)
+
+
+class Collection(Base):
+    """Tabla `collections`: agrupa ediciones de OBRAS DISTINTAS bajo un nombre
+    comun (p. ej. "Remasterizaciones HDCD": la edicion HDCD de Tubular Bells,
+    la de Hergest Ridge... cada una en su propio `Release`).
+
+    NO es lo mismo que una caja fisica con varios discos del MISMO album --
+    eso ya es una `Edition` normal (o un `Release` de tipo `compilation`), no
+    necesita nada de esto. Una `Collection` es un agrupamiento TRANSVERSAL
+    pensado para navegar la app (p. ej. "todas las remasterizaciones en
+    HDCD"), no una publicacion fisica real: por eso no tiene pais, sello,
+    fecha ni formato propios, solo nombre y descripcion.
+
+    Una `Edition` puede estar en 0, 1 o varias colecciones a la vez.
+    """
+
+    __tablename__ = "collections"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    name: Mapped[str] = mapped_column(String(200), unique=True, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    editions: Mapped[list["Edition"]] = relationship(
+        secondary=collection_editions, back_populates="collections"
+    )
+
+    def __repr__(self) -> str:
+        return f"<Collection id={self.id} name={self.name!r}>"
+
+
 class Edition(Base):
     """Tabla `editions`: una publicacion CONCRETA de un `Release`.
 
@@ -252,6 +314,13 @@ class Edition(Base):
         back_populates="edition",
         cascade="all, delete-orphan",
         order_by="Image.position",
+    )
+    # Sin cascade "delete-orphan": borrar una edicion no debe borrar la(s)
+    # Collection(s) a la que pertenece (a diferencia de tracks/images, que son
+    # propiedad exclusiva de la edicion). El ondelete=CASCADE de la FK en
+    # `collection_editions` ya se encarga de quitar la fila puente.
+    collections: Mapped[list["Collection"]] = relationship(
+        secondary=collection_editions, back_populates="editions"
     )
 
     def __repr__(self) -> str:

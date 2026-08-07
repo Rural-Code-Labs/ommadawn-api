@@ -412,9 +412,30 @@ Leer el catálogo es **público**; crear, editar o borrar exige ser **administra
 | `POST` | `.../editions/{edition_id}/images` | 🔒👑 | Sube una imagen (`multipart/form-data`: `image_type` + `file`) |
 | `PATCH` | `.../editions/{edition_id}/images/{image_id}/position` | 🔒👑 | Mueve la imagen arriba o abajo (`{"direction": "up"\|"down"}`); devuelve la lista completa reordenada |
 | `DELETE` | `.../editions/{edition_id}/images/{image_id}` | 🔒👑 | Borra una imagen |
+| `GET` | `/api/v1/discography/collections` | — | Lista colecciones con `edition_count` y 2-3 `sample_cover_urls` |
+| `GET` | `/api/v1/discography/collections/{id}` | — | Detalle: `name`, `description` y ediciones ordenadas por fecha, cada una con los datos de su obra de origen |
+| `POST` | `/api/v1/discography/collections` | 🔒👑 | Crea una colección (nombre único) |
+| `DELETE` | `/api/v1/discography/collections/{id}` | 🔒👑 | Borra una colección (409 si tiene ediciones asociadas) |
+| `POST` | `.../collections/{id}/editions` | 🔒👑 | Añade una edición (`{"edition_id": ...}`, de cualquier obra); idempotente |
+| `DELETE` | `.../collections/{id}/editions/{edition_id}` | 🔒👑 | Quita una edición de la colección (no la borra) |
 
 🔒👑 = requiere `Authorization: Bearer <access token>` de un usuario **administrador**
 (`is_admin=True`; se marca directamente en BD, no hay endpoint público para ello).
+
+### Colecciones
+
+Una `Collection` agrupa ediciones de **obras distintas** bajo un nombre común — por
+ejemplo, "Remasterizaciones HDCD" junta la edición HDCD de *Tubular Bells*, la de
+*Hergest Ridge*, etc., cada una en su propio `Release`. No confundir con una caja física
+de varios discos del *mismo* álbum: eso ya es una `Edition` normal (o un `Release` de tipo
+`compilation`), no necesita nada de esto.
+
+Es un agrupamiento transversal, ortogonal a la jerarquía `Release → Edition`: una edición
+puede estar en 0, 1 o varias colecciones. El orden dentro de una colección es **siempre**
+por `release_date` (las ediciones sin fecha, al final) — no hay forma de reordenar a mano.
+Como en `GET .../collections/{id}` cada fila puede pertenecer a una obra distinta, cada
+edición incluye `release_id`/`release_title`/`release_type` además de sus propios datos
+(`edition_name`, `cover_url`).
 
 **Tracks**: cada `Track` referencia una `Recording` (por `recording_id`). Al crear/editar una
 edición, cada tema del array `tracks` acepta dos formas:

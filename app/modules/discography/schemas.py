@@ -157,6 +157,19 @@ class RecordingUpdate(BaseModel):
     credits: str | None = None
 
 
+class CollectionCreate(BaseModel):
+    """Datos para crear una coleccion (body de POST /collections)."""
+
+    name: str = Field(min_length=1, max_length=200)
+    description: str | None = None
+
+
+class CollectionEditionAdd(BaseModel):
+    """Body de POST /collections/{id}/editions: que edicion anadir."""
+
+    edition_id: int
+
+
 class ReleaseCreate(BaseModel):
     """Datos para anadir una obra al catalogo (body de POST /releases).
 
@@ -286,5 +299,56 @@ class ReleaseRead(BaseModel):
     description: str | None
     created_at: datetime
     editions: list[EditionRead]
+
+    model_config = {"from_attributes": True}
+
+
+class CollectionListRead(BaseModel):
+    """Vista publica de una coleccion en el listado (GET /collections).
+
+    `sample_cover_urls`: la portada (`front_cover`) de las 2-3 primeras
+    ediciones por `release_date`, para las portadas encadenadas en la app. Si
+    alguna de esas ediciones no tiene portada, simplemente se omite (la lista
+    puede tener menos de 3 elementos, o estar vacia).
+    """
+
+    id: int
+    name: str
+    edition_count: int
+    sample_cover_urls: list[str]
+
+    model_config = {"from_attributes": True}
+
+
+class CollectionEditionRead(BaseModel):
+    """Una edicion dentro de una coleccion, con los datos de su OBRA DE ORIGEN.
+
+    A diferencia de `EditionRead` (siempre anidada bajo su `Release`, donde el
+    disco de origen es implicito), aqui cada fila puede pertenecer a una obra
+    distinta -- por eso lleva `release_id`/`release_title`/`release_type`
+    ademas de sus propios datos.
+    """
+
+    id: int
+    release_id: int
+    release_title: str
+    release_type: ReleaseType
+    edition_name: str | None
+    release_date: date | None
+    cover_url: str | None
+
+
+class CollectionDetailRead(BaseModel):
+    """Vista publica de una coleccion con detalle (GET /collections/{id} y
+    respuesta de crear/anadir/quitar ediciones).
+
+    `editions` va ordenada por `release_date` (las ediciones sin fecha, al
+    final) -- el orden dentro de una coleccion nunca es manual.
+    """
+
+    id: int
+    name: str
+    description: str | None
+    editions: list[CollectionEditionRead]
 
     model_config = {"from_attributes": True}

@@ -8,12 +8,13 @@ reutilizar `HTTPException`, igual que hace `core/exceptions.py`.
 from uuid import uuid4
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.storage import StorageBackend, validate_image_upload
 from app.modules.discography.models import (
+    Collection,
     Edition,
     Image,
     ImageType,
@@ -22,8 +23,13 @@ from app.modules.discography.models import (
     Release,
     ReleaseType,
     Track,
+    collection_editions,
 )
 from app.modules.discography.schemas import (
+    CollectionCreate,
+    CollectionDetailRead,
+    CollectionEditionRead,
+    CollectionListRead,
     EditionCreate,
     EditionUpdate,
     LabelRead,
@@ -53,6 +59,10 @@ recording_not_found_exception = HTTPException(
 label_not_found_exception = HTTPException(
     status_code=status.HTTP_404_NOT_FOUND,
     detail="Sello no encontrado",
+)
+collection_not_found_exception = HTTPException(
+    status_code=status.HTTP_404_NOT_FOUND,
+    detail="Coleccion no encontrada",
 )
 
 # Carga en cadena: ediciones de un Release, y temas/imagenes/recordings de cada
@@ -559,4 +569,183 @@ async def delete_image(
 
     await storage.delete(image.url)
     await session.delete(image)
+    await session.commit()
+
+
+# --- Collection (agrupa ediciones de OBRAS DISTINTAS bajo un nombre comun) -------
+
+_duplicate_collection_exception = HTTPException(
+    status_code=status.HTTP_409_CONFLICT,
+    detail="Ya existe una coleccion con ese nombre",
+)
+
+_COLLECTION_WITH_EDITIONS = (
+    selectinload(Collection.editions).selectinload(Edition.images),
+)
+_COLLECTION_DETAIL = (
+    selectinload(Collection.editions).selectinload(Edition.images),
+    selectinload(Collection.editions).selectinload(Edition.release),
+)
+
+
+def _sorted_by_release_date(editions: list[Edition]) -> list[Edition]:
+    """Ordena ediciones por `release_date`, las sin fecha al final.
+
+    `(release_date is None, release_date)` como clave: agrupa primero las que
+    SI tienen fecha (False < True), y dentro de cada grupo solo se comparan
+    valores homogeneos (fecha con fecha, o None con None), asi que nunca
+    revienta comparando None con una fecha real.
+    """
+    return sorted(editions, key=lambda e: (e.release_date is None, e.release_date))
+
+
+def _front_cover_url(edition: Edition) -> str | None:
+    """Devuelve la URL de la portada (`front_cover`) de una edicion, si tiene."""
+    for image in edition.images:
+        if image.image_type == ImageType.FRONT_COVER:
+            return image.url
+    return None
+
+
+def _build_collection_list_read(collection: Collection) -> CollectionListRead:
+    ordered = _sorted_by_release_date(collection.editions)
+    sample_covers = [
+        url for e in ordered[:3] if (url := _front_cover_url(e)) is not None
+    ]
+    return CollectionListRead(
+        id=collection.id,
+        name=collection.name,
+        edition_count=len(collection.editions),
+        sample_cover_urls=sample_covers,
+    )
+
+
+def _build_collection_detail_read(collection: Collection) -> CollectionDetailRead:
+    ordered = _sorted_by_release_date(collection.editions)
+    return CollectionDetailRead(
+        id=collection.id,
+        name=collection.name,
+        description=collection.description,
+        editions=[
+            CollectionEditionRead(
+                id=e.id,
+                release_id=e.release.id,
+                release_title=e.release.title,
+                release_type=e.release.release_type,
+                edition_name=e.edition_name,
+                release_date=e.release_date,
+                cover_url=_front_cover_url(e),
+            )
+            for e in ordered
+        ],
+    )
+
+
+async def _get_collection_or_404(session: AsyncSession, collection_id: int) -> Collection:
+    collection = await session.get(Collection, collection_id)
+    if collection is None:
+        raise collection_not_found_exception
+    return collection
+
+
+async def list_collections(session: AsyncSession) -> list[CollectionListRead]:
+    """Lista colecciones con su numero de ediciones y 2-3 portadas de muestra
+    (las primeras ediciones por `release_date`)."""
+    result = await session.execute(
+        select(Collection).options(*_COLLECTION_WITH_EDITIONS).order_by(Collection.name)
+    )
+    return [_build_collection_list_read(c) for c in result.scalars().all()]
+
+
+async def get_collection(session: AsyncSession, collection_id: int) -> CollectionDetailRead:
+    """Detalle de una coleccion: nombre, descripcion y sus ediciones ordenadas
+    por `release_date`, cada una con los datos de su obra de origen."""
+    result = await session.execute(
+        select(Collection)
+        .options(*_COLLECTION_DETAIL)
+        .where(Collection.id == collection_id)
+    )
+    collection = result.scalar_one_or_none()
+    if collection is None:
+        raise collection_not_found_exception
+    return _build_collection_detail_read(collection)
+
+
+async def create_collection(session: AsyncSession, data: CollectionCreate) -> CollectionDetailRead:
+    """Crea una coleccion. Lanza 409 si el nombre ya existe."""
+    from sqlalchemy.exc import IntegrityError
+
+    collection = Collection(name=data.name.strip(), description=data.description)
+    session.add(collection)
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise _duplicate_collection_exception
+    await session.refresh(collection, attribute_names=["editions"])
+    return _build_collection_detail_read(collection)
+
+
+async def delete_collection(session: AsyncSession, collection_id: int) -> None:
+    """Borra una coleccion. Lanza 409 si tiene alguna edicion asociada."""
+    collection = await _get_collection_or_404(session, collection_id)
+    in_use = await session.scalar(
+        select(collection_editions.c.edition_id)
+        .where(collection_editions.c.collection_id == collection_id)
+        .limit(1)
+    )
+    if in_use is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No se puede borrar: la coleccion tiene ediciones asociadas",
+        )
+    await session.delete(collection)
+    await session.commit()
+
+
+async def add_edition_to_collection(
+    session: AsyncSession, collection_id: int, edition_id: int
+) -> CollectionDetailRead:
+    """Anade una edicion a una coleccion. Idempotente: si ya estaba, no pasa
+    nada (no es un conflicto añadir dos veces la misma edicion)."""
+    await _get_collection_or_404(session, collection_id)
+    edition = await session.get(Edition, edition_id)
+    if edition is None:
+        raise edition_not_found_exception
+
+    already = await session.scalar(
+        select(collection_editions.c.edition_id).where(
+            collection_editions.c.collection_id == collection_id,
+            collection_editions.c.edition_id == edition_id,
+        )
+    )
+    if already is None:
+        await session.execute(
+            collection_editions.insert().values(
+                collection_id=collection_id, edition_id=edition_id
+            )
+        )
+        await session.commit()
+
+    return await get_collection(session, collection_id)
+
+
+async def remove_edition_from_collection(
+    session: AsyncSession, collection_id: int, edition_id: int
+) -> None:
+    """Quita una edicion de una coleccion. Lanza 404 si esa edicion no estaba
+    (en esta coleccion) para empezar."""
+    await _get_collection_or_404(session, collection_id)
+
+    result = await session.execute(
+        delete(collection_editions).where(
+            collection_editions.c.collection_id == collection_id,
+            collection_editions.c.edition_id == edition_id,
+        )
+    )
+    if result.rowcount == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Esa edicion no esta en esta coleccion",
+        )
     await session.commit()

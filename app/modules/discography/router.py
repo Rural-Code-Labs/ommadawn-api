@@ -30,6 +30,10 @@ from app.modules.discography.models import (
     ReleaseType,
 )
 from app.modules.discography.schemas import (
+    CollectionCreate,
+    CollectionDetailRead,
+    CollectionEditionAdd,
+    CollectionListRead,
     EditionCreate,
     EditionRead,
     EditionUpdate,
@@ -468,3 +472,133 @@ async def delete_image(
 ) -> None:
     """Borra una imagen: la fila y el fichero subyacente."""
     await service.delete_image(session, storage, release_id, edition_id, image_id)
+
+
+# --- Collection (agrupa ediciones de OBRAS DISTINTAS bajo un nombre comun) -------
+
+_COLLECTION_NOT_FOUND = {
+    "model": ErrorMessage,
+    "description": "La coleccion no existe",
+}
+_COLLECTION_DUPLICATE = {
+    "model": ErrorMessage,
+    "description": "Ya existe una coleccion con ese nombre",
+}
+_COLLECTION_EDITION_NOT_FOUND = {
+    "model": ErrorMessage,
+    "description": "Esa edicion no existe, o no esta en esta coleccion (segun el endpoint)",
+}
+
+
+@router.get(
+    "/collections",
+    response_model=list[CollectionListRead],
+    summary="Listar colecciones de ediciones",
+)
+async def list_collections(
+    session: AsyncSession = Depends(get_session),
+) -> list[CollectionListRead]:
+    """Lista colecciones (p. ej. "Remasterizaciones HDCD") con su numero de
+    ediciones y 2-3 portadas de muestra, ordenadas cronologicamente."""
+    return await service.list_collections(session)
+
+
+@router.get(
+    "/collections/{collection_id}",
+    response_model=CollectionDetailRead,
+    summary="Detalle de una coleccion (con sus ediciones)",
+    responses={status.HTTP_404_NOT_FOUND: _COLLECTION_NOT_FOUND},
+)
+async def get_collection(
+    collection_id: int, session: AsyncSession = Depends(get_session)
+) -> CollectionDetailRead:
+    """Devuelve una coleccion con sus ediciones ordenadas por fecha de
+    publicacion (las sin fecha, al final), cada una con los datos de su
+    obra de origen."""
+    return await service.get_collection(session, collection_id)
+
+
+@router.post(
+    "/collections",
+    response_model=CollectionDetailRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Crear una coleccion (requiere administrador)",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: _NO_AUTH,
+        status.HTTP_403_FORBIDDEN: _FORBIDDEN,
+        status.HTTP_409_CONFLICT: _COLLECTION_DUPLICATE,
+    },
+)
+async def create_collection(
+    data: CollectionCreate,
+    session: AsyncSession = Depends(get_session),
+    _admin: User = Depends(require_admin),
+) -> CollectionDetailRead:
+    """Crea una coleccion (nombre + descripcion opcional). Sus ediciones se
+    anaden por separado."""
+    return await service.create_collection(session, data)
+
+
+@router.delete(
+    "/collections/{collection_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Borrar una coleccion (requiere administrador)",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: _NO_AUTH,
+        status.HTTP_403_FORBIDDEN: _FORBIDDEN,
+        status.HTTP_404_NOT_FOUND: _COLLECTION_NOT_FOUND,
+        status.HTTP_409_CONFLICT: {
+            "model": ErrorMessage,
+            "description": "La coleccion tiene ediciones asociadas",
+        },
+    },
+)
+async def delete_collection(
+    collection_id: int,
+    session: AsyncSession = Depends(get_session),
+    _admin: User = Depends(require_admin),
+) -> None:
+    """Borra una coleccion. Falla con 409 si todavia tiene ediciones."""
+    await service.delete_collection(session, collection_id)
+
+
+@router.post(
+    "/collections/{collection_id}/editions",
+    response_model=CollectionDetailRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Anadir una edicion a una coleccion (requiere administrador)",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: _NO_AUTH,
+        status.HTTP_403_FORBIDDEN: _FORBIDDEN,
+        status.HTTP_404_NOT_FOUND: _COLLECTION_EDITION_NOT_FOUND,
+    },
+)
+async def add_edition_to_collection(
+    collection_id: int,
+    data: CollectionEditionAdd,
+    session: AsyncSession = Depends(get_session),
+    _admin: User = Depends(require_admin),
+) -> CollectionDetailRead:
+    """Anade una edicion (de cualquier obra) a la coleccion. Idempotente: si
+    ya estaba, no pasa nada. Devuelve la coleccion completa actualizada."""
+    return await service.add_edition_to_collection(session, collection_id, data.edition_id)
+
+
+@router.delete(
+    "/collections/{collection_id}/editions/{edition_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Quitar una edicion de una coleccion (requiere administrador)",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: _NO_AUTH,
+        status.HTTP_403_FORBIDDEN: _FORBIDDEN,
+        status.HTTP_404_NOT_FOUND: _COLLECTION_EDITION_NOT_FOUND,
+    },
+)
+async def remove_edition_from_collection(
+    collection_id: int,
+    edition_id: int,
+    session: AsyncSession = Depends(get_session),
+    _admin: User = Depends(require_admin),
+) -> None:
+    """Quita una edicion de la coleccion (no borra la edicion en si)."""
+    await service.remove_edition_from_collection(session, collection_id, edition_id)
