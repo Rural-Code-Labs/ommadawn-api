@@ -486,23 +486,3 @@ Un bot de Telegram corre en la Pi (`ommadawn-bot` systemd). Solo responde al cha
 | `/on` | Iniciar |
 | `/off` | Detener |
 | `/restart` | Reiniciar |
-
----
-
-## Plan por fases
-
-El proyecto se construye por fases pequeñas; cada una se cierra (y se entiende)
-antes de empezar la siguiente.
-
-| Fase | Contenido | Estado |
-|---|---|---|
-| **1 — Esqueleto** | Estructura del proyecto, capa `core/` (config, base de datos, `Base` ORM) y app FastAPI con `/health`. | ✅ Hecha |
-| **2 — Modelo de usuario** | Model ORM `User`: login por username o email (únicos), `full_name` y `hashed_password` opcionales (preparado para OAuth), `is_active`, `is_admin`, timestamps. Ampliado con datos de perfil editables (`country`, `city`, `birth_date`, avatar, `theme_preference`) y rol `is_super_admin`. | ✅ Hecha |
-| **3 — Flujo de tokens** | Hashing argon2, JWT access token y refresh token con rotación. | ✅ Hecha |
-| **4 — Endpoints de auth** | `register`, `login`, `refresh`, `logout`, `me` + tests de integración. Cierra el bloque de auth. | ✅ Hecha |
-| **5 — Discografía** | Álbumes de estudio, recopilatorios, singles, bootlegs, directos… y sus temas/pistas. | 🚧 En marcha (discos ya funcionando) |
-| **6 — Colecciones de ediciones** | Agrupar ediciones de obras distintas bajo un nombre común (p. ej. "Remasterizaciones HDCD"). | ✅ Hecha |
-| **7 — Contribuciones de usuarios normales** | Proponer cambios al catálogo; un admin aprueba o rechaza. | Pendiente |
-| **8 — Colección personal** | Cada usuario marca qué ediciones tiene, con estado del disco y la funda (escala Discogs: Mint / NM / VG+ / VG / G / F / P). | Pendiente |
-| **9 — Conciertos** | Giras, fechas, salas, setlists. | Pendiente |
-| **10 — Libros** | Bibliografía relacionada. | Pendiente |

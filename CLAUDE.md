@@ -35,11 +35,12 @@ mantenerse estable y bien versionado.
   Python importable es `app`** (Python no admite guion en un `import`). No existe
   `ommadawn_api` en el código, solo aparecía en prosa.
 - **Progreso**: **Fases 1–4 (bloque de auth) cerradas** ✅. **Fase 5 (Discografía) en
-  marcha**: modelo `Release`/`Track` + endpoints de discos ya funcionando (ver tabla de
-  fases y sección "Discografía" más abajo). Quedan recopilatorios/singles/bootlegs por
-  poblar con datos reales y, más adelante, "directos" como tipo nuevo. **Fase 6
-  (Colecciones de ediciones) cerrada** ✅: `Collection` agrupa ediciones de obras
-  distintas bajo un nombre común (ver sección "Colecciones de ediciones" más abajo).
+  marcha**: modelo `Release`/`Track` + endpoints de discos ya funcionando (ver sección
+  "Discografía" más abajo). Quedan recopilatorios/singles/bootlegs por poblar con datos
+  reales y, más adelante, "directos" como tipo nuevo. **Fase 6 (Colecciones de ediciones)
+  cerrada** ✅: `Collection` agrupa ediciones de obras distintas bajo un nombre común
+  (ver sección "Colecciones de ediciones" más abajo). **Las fases se gestionan desde el
+  repo de la app** (`ommadawn-ios`); aquí solo se aplica lo que se pida en cada una.
 - **Base de datos en desarrollo = PostgreSQL local en Docker** (`docker compose up -d`),
   el mismo motor que en producción. SQLite queda como alternativa rápida (línea comentada
   en `.env` / `.env.example`).
@@ -814,31 +815,6 @@ Deploy key del repo en la Pi: `~/.ssh/id_ed25519` (solo lectura en GitHub).
 **Bot de Telegram** (`ommadawn-bot.service`): controla el servicio desde el móvil.
 Script en `/home/vattenbit/ommadawn-bot.py`. Comandos: `/status`, `/on`, `/off`, `/restart`.
 Solo responde al chat ID autorizado — el token y el chat ID viven en el script (no en el repo).
-
----
-
-## Plan por fases
-
-El proyecto se construye por fases **pequeñas y entendibles**. Cada fase se cierra (y se
-entiende) antes de empezar la siguiente. Las secciones de dominio se detallarán con el usuario
-sobre la marcha.
-
-El bloque de **auth (usuarios)** se escribe **desde cero** (no se copia `identity_service`;
-solo sirve de referencia de estilo) y se reparte en varias fases:
-
-| Fase | Contenido | Estado |
-|---|---|---|
-| **Fase 1 — Esqueleto / schema base** | Estructura del proyecto: `pyproject.toml`, `.env`, capa `core/` (config, base de datos, `Base` ORM) y app FastAPI que arranca con `/health`. | ✅ Hecha |
-| **Fase 2 — Modelo de usuario** | Model ORM `User` (tabla `users`): login por username o email (ambos únicos), `full_name` y `hashed_password` opcionales (preparado para OAuth futuro), `is_active`, `is_admin`, timestamps. Ampliado después con perfil editable (`country`, `city`, `birth_date`, avatar, `theme_preference`) y `is_super_admin` — ver "Perfil, avatar y roles" más abajo. | ✅ Hecha |
-| **Fase 3 — Flujo de tokens** | Access token + refresh token con rotación, hashing de contraseñas (argon2), seguridad JWT. | ✅ Hecha |
-| **Fase 4 — Endpoints de auth** | `register`, `login`, `refresh`, `logout`, `me` + tests de integración. Cierra el bloque de auth. | ✅ Hecha |
-| **Fase 5 — Discografía** | Discos (álbumes de estudio), recopilatorios, singles, bootlegs, directos… y sus temas/pistas. | 🚧 En marcha (modelo + endpoints de discos listos; falta poblar y añadir "directo") |
-| **Fase 6 — Colecciones de ediciones** | Agrupar ediciones de obras distintas bajo un nombre común (p. ej. "Remasterizaciones HDCD"), navegable desde `/discography/collections`. | ✅ Hecha |
-| **Fase 7 — Contribuciones de usuarios normales** | Un usuario no-admin propone cambios al catálogo; un admin los aprueba o rechaza. | Pendiente |
-| **Fase 8 — Colección personal** | Cada usuario marca qué ediciones tiene, con el estado del disco y de la funda (escala Discogs: Mint / NM / VG+ / VG / G / F / P). | Pendiente |
-| **Fase 9 — Conciertos** | Giras, fechas, salas, setlists. | Pendiente |
-| **Fase 10 — Libros** | Bibliografía relacionada. | Pendiente |
-| **Fases siguientes** | Otras secciones a acordar con el usuario. | Pendiente |
 
 ---
 
