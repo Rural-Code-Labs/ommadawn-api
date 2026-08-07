@@ -164,6 +164,17 @@ class CollectionCreate(BaseModel):
     description: str | None = None
 
 
+class CollectionUpdate(BaseModel):
+    """Datos para editar una coleccion (body de PATCH /collections/{id}). PATCH parcial.
+
+    Mismo patron que ReleaseUpdate/LabelUpdate: solo se tocan los campos
+    PRESENTES en el body (el service usa `model_dump(exclude_unset=True)`).
+    """
+
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = None
+
+
 class CollectionEditionAdd(BaseModel):
     """Body de POST /collections/{id}/editions: que edicion anadir."""
 

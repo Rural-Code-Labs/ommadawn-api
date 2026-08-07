@@ -30,6 +30,7 @@ from app.modules.discography.schemas import (
     CollectionDetailRead,
     CollectionEditionRead,
     CollectionListRead,
+    CollectionUpdate,
     EditionCreate,
     EditionUpdate,
     LabelRead,
@@ -686,6 +687,27 @@ async def create_collection(session: AsyncSession, data: CollectionCreate) -> Co
         raise _duplicate_collection_exception
     await session.refresh(collection, attribute_names=["editions"])
     return _build_collection_detail_read(collection)
+
+
+async def update_collection(
+    session: AsyncSession, collection_id: int, data: CollectionUpdate
+) -> CollectionDetailRead:
+    """Edita una coleccion. Solo toca los campos presentes en el body (PATCH
+    real). Lanza 409 si el nuevo nombre ya lo usa OTRA coleccion."""
+    from sqlalchemy.exc import IntegrityError
+
+    collection = await _get_collection_or_404(session, collection_id)
+    updates = data.model_dump(exclude_unset=True)
+    if "name" in updates and updates["name"] is not None:
+        updates["name"] = updates["name"].strip()
+    for field, value in updates.items():
+        setattr(collection, field, value)
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise _duplicate_collection_exception
+    return await get_collection(session, collection_id)
 
 
 async def delete_collection(session: AsyncSession, collection_id: int) -> None:

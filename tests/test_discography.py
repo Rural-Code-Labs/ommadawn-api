@@ -1110,6 +1110,123 @@ async def test_get_unknown_collection_returns_404(client: AsyncClient):
     assert resp.status_code == 404
 
 
+async def test_update_collection_requires_authentication(client: AsyncClient):
+    resp = await client.patch(f"{BASE}/collections/1", json={"name": "x"})
+    assert resp.status_code == 401
+
+
+async def test_update_collection_requires_admin(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    collection_id = await _create_collection(client, headers)
+
+    await client.post(f"{AUTH_BASE}/register", json=FAN_CREDS)
+    fan_headers = await _login(client, FAN_CREDS["username"], FAN_CREDS["password"])
+
+    resp = await client.patch(
+        f"{BASE}/collections/{collection_id}", json={"name": "x"}, headers=fan_headers
+    )
+    assert resp.status_code == 403
+
+
+async def test_update_unknown_collection_returns_404(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    resp = await client.patch(
+        f"{BASE}/collections/999", json={"name": "x"}, headers=headers
+    )
+    assert resp.status_code == 404
+
+
+async def test_update_collection_name_and_description(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    collection_id = await _create_collection(client, headers, "HDCD")
+
+    resp = await client.patch(
+        f"{BASE}/collections/{collection_id}",
+        json={"name": "Remasterizaciones HDCD", "description": "Reediciones de 2016"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["name"] == "Remasterizaciones HDCD"
+    assert body["description"] == "Reediciones de 2016"
+
+
+async def test_update_collection_only_touches_sent_fields(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    resp = await client.post(
+        f"{BASE}/collections",
+        json={"name": "HDCD", "description": "Descripcion original"},
+        headers=headers,
+    )
+    collection_id = resp.json()["id"]
+
+    resp = await client.patch(
+        f"{BASE}/collections/{collection_id}",
+        json={"name": "HDCD 2016"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["name"] == "HDCD 2016"
+    assert body["description"] == "Descripcion original"  # no se toco
+
+
+async def test_update_collection_can_clear_description_with_null(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    resp = await client.post(
+        f"{BASE}/collections",
+        json={"name": "HDCD", "description": "Se va a borrar"},
+        headers=headers,
+    )
+    collection_id = resp.json()["id"]
+
+    resp = await client.patch(
+        f"{BASE}/collections/{collection_id}",
+        json={"description": None},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["description"] is None
+
+
+async def test_update_collection_duplicate_name_returns_409(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    await _create_collection(client, headers, "HDCD")
+    other_id = await _create_collection(client, headers, "Boxed")
+
+    resp = await client.patch(
+        f"{BASE}/collections/{other_id}", json={"name": "HDCD"}, headers=headers
+    )
+    assert resp.status_code == 409
+
+
+async def test_update_collection_keeping_same_name_is_not_a_conflict(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _admin_headers(client, db_session)
+    collection_id = await _create_collection(client, headers, "HDCD")
+
+    resp = await client.patch(
+        f"{BASE}/collections/{collection_id}",
+        json={"name": "HDCD", "description": "Nueva descripcion"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["description"] == "Nueva descripcion"
+
+
 async def test_add_edition_to_collection(client: AsyncClient, db_session: AsyncSession):
     headers = await _admin_headers(client, db_session)
     collection_id = await _create_collection(client, headers)

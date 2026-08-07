@@ -34,6 +34,7 @@ from app.modules.discography.schemas import (
     CollectionDetailRead,
     CollectionEditionAdd,
     CollectionListRead,
+    CollectionUpdate,
     EditionCreate,
     EditionRead,
     EditionUpdate,
@@ -537,6 +538,27 @@ async def create_collection(
     """Crea una coleccion (nombre + descripcion opcional). Sus ediciones se
     anaden por separado."""
     return await service.create_collection(session, data)
+
+
+@router.patch(
+    "/collections/{collection_id}",
+    response_model=CollectionDetailRead,
+    summary="Editar una coleccion (requiere administrador)",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: _NO_AUTH,
+        status.HTTP_403_FORBIDDEN: _FORBIDDEN,
+        status.HTTP_404_NOT_FOUND: _COLLECTION_NOT_FOUND,
+        status.HTTP_409_CONFLICT: _COLLECTION_DUPLICATE,
+    },
+)
+async def update_collection(
+    collection_id: int,
+    data: CollectionUpdate,
+    session: AsyncSession = Depends(get_session),
+    _admin: User = Depends(require_admin),
+) -> CollectionDetailRead:
+    """Edita los campos presentes en el body (nombre y/o descripcion)."""
+    return await service.update_collection(session, collection_id, data)
 
 
 @router.delete(

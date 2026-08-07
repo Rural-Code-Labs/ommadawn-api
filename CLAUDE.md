@@ -789,6 +789,13 @@ país/sello/fecha/formato propios.
 - **Crear una colección reutiliza el patrón de `Label`** (`session.add` + `commit` +
   capturar `IntegrityError` del `UNIQUE` de BD → 409), no un `SELECT` previo por nombre: más
   robusto ante condiciones de carrera que buscar-antes-de-insertar.
+- **`PATCH /collections/{id}` (`service.update_collection`) es el mismo patrón que
+  `update_label`**: PATCH real (`model_dump(exclude_unset=True)`), captura `IntegrityError`
+  del `UNIQUE` → 409 en vez de un `SELECT` previo por nombre. Mantener el mismo nombre no
+  choca con el `UNIQUE` (Postgres compara contra el resto de filas, no consigo misma), así
+  que no hace falta un `id != other.id` explícito. Al final llama a `get_collection` (en vez
+  de un `session.refresh` manual) para devolver el `CollectionDetailRead` completo con las
+  ediciones ya cargadas — mismo truco que usa `add_edition_to_collection`.
 - **`EditionRead.collections` (relación INVERSA, campo pedido a posteriori)**: qué
   colecciones incluyen esta edición — precarga los tags del formulario de edición en la app
   y sirve para un enlace "Parte de: X" en su detalle. Shape `CollectionSummaryRead` (solo

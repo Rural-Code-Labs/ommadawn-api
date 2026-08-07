@@ -415,6 +415,7 @@ Leer el catálogo es **público**; crear, editar o borrar exige ser **administra
 | `GET` | `/api/v1/discography/collections` | — | Lista colecciones con `edition_count` y 2-3 `sample_cover_urls` |
 | `GET` | `/api/v1/discography/collections/{id}` | — | Detalle: `name`, `description` y ediciones ordenadas por fecha, cada una con los datos de su obra de origen |
 | `POST` | `/api/v1/discography/collections` | 🔒👑 | Crea una colección (nombre único) |
+| `PATCH` | `/api/v1/discography/collections/{id}` | 🔒👑 | Edita nombre y/o descripción (409 si el nombre ya lo usa otra colección) |
 | `DELETE` | `/api/v1/discography/collections/{id}` | 🔒👑 | Borra una colección (409 si tiene ediciones asociadas) |
 | `POST` | `.../collections/{id}/editions` | 🔒👑 | Añade una edición (`{"edition_id": ...}`, de cualquier obra); idempotente |
 | `DELETE` | `.../collections/{id}/editions/{edition_id}` | 🔒👑 | Quita una edición de la colección (no la borra) |
