@@ -475,6 +475,16 @@ no sirve ninguna página HTML, todo queda en JSON + la app.
   hasta tener una cuenta/proyecto real contra el que probarlo (mismo criterio que
   `GCSStorageBackend`: código no verificable no se escribe a ciegas). Se elige por
   `Settings.email_backend` (`.env`), igual que `storage_backend` elige el backend de ficheros.
+- **Gotcha real que se dio la primera vez**: `ConsoleEmailBackend.send` usa
+  `logger.info(...)` sobre `logging.getLogger("app.email")`, pero sin configurar el logging de
+  la app ese `INFO` no llega a ningún sitio — el logger raíz de Python, sin config explícita,
+  solo emite `WARNING` para arriba y no tiene ningún *handler* que escriba a la terminal (se ve
+  la petición HTTP porque esa la loguea uvicorn con su propia config, pero no el cuerpo del
+  email). Arreglado con `logging.basicConfig(level=logging.INFO, force=True)` en
+  `app/main.py`, al principio del fichero (antes de crear la `app`). `force=True` es
+  necesario para que se aplique pase lo que pase se haya importado ya antes (p. ej. bajo
+  `uvicorn --reload`), en vez de depender de que nadie más haya llamado a `basicConfig` primero
+  (esa función "no hace nada si el logger raíz ya tiene *handlers*", salvo `force=True`).
 - **`_is_past`** (antes `_is_expired`, en `service.py`): se generalizó para aceptar un
   `datetime` cualquiera en vez de solo una fila de `RefreshToken`, y así reutilizar la misma
   normalización UTC (SQLite naive vs. Postgres aware) al comprobar la caducidad del código de

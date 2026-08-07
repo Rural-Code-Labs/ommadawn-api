@@ -8,6 +8,7 @@ Responsabilidades de este fichero (y solo estas):
 La logica de negocio NO vive aqui: vive en cada modulo (app/modules/*).
 """
 
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -18,6 +19,18 @@ from app.core.config import get_settings
 from app.core.openapi import use_ios_friendly_openapi
 from app.modules.auth.router import router as auth_router
 from app.modules.discography.router import router as discography_router
+
+# Sin esto, un `logger.info(...)` como el de ConsoleEmailBackend (ver
+# app/core/email.py) no aparece en ningun sitio: el logger raiz de Python, sin
+# configurar, solo emite WARNING para arriba y no tiene ningun handler que
+# escriba a la terminal. `force=True` asegura que esto se aplica pase lo que
+# pase se haya importado antes (p. ej. bajo `uvicorn --reload`), en vez de
+# depender de que nadie mas haya llamado ya a basicConfig.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    force=True,
+)
 
 settings = get_settings()
 
