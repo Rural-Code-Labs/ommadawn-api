@@ -132,6 +132,19 @@ class User(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    # --- Recuperacion de contrasena ---
+    # Mismo diseno que el par de arriba (hash + caducidad, sobrescribible),
+    # pero en sus propias columnas: son conceptos distintos (verificar que el
+    # email es tuyo vs. demostrar que sigues siendo el dueno de la cuenta para
+    # poder cambiar la contrasena) y pueden tener un codigo pendiente cada uno
+    # a la vez sin pisarse.
+    password_reset_code_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    password_reset_code_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     # --- Estado / permisos ---
     # Permite desactivar una cuenta sin borrarla (baneos, verificacion de email
     # futura, etc.). El login exigira que este activa.
@@ -262,3 +275,29 @@ class EmailVerificationAttempt(Base):
 
     def __repr__(self) -> str:
         return f"<EmailVerificationAttempt id={self.id} user_id={self.user_id}>"
+
+
+class PasswordResetAttempt(Base):
+    """Tabla `password_reset_attempts`: un intento FALLIDO de confirmar un
+    codigo de recuperacion de contrasena.
+
+    Mismo patron que `EmailVerificationAttempt`, con una diferencia clave: NO
+    tiene FK a `users`. `POST /auth/password-reset/confirm` es un endpoint SIN
+    autenticar en el que la cuenta puede no existir, y el limite de intentos
+    tiene que aplicar TAMBIEN en ese caso (para no revelar por el propio limite
+    si un email/username esta registrado) -> se cuenta por `identifier` (el
+    `username_or_email` tal cual se envio), no por `user_id`.
+    """
+
+    __tablename__ = "password_reset_attempts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    identifier: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    def __repr__(self) -> str:
+        return f"<PasswordResetAttempt id={self.id} identifier={self.identifier!r}>"

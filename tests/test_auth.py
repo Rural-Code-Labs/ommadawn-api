@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.exceptions import credentials_exception
 from app.modules.auth import service
-from app.modules.auth.models import EmailVerificationAttempt, User
+from app.modules.auth.models import EmailVerificationAttempt, PasswordResetAttempt, User
 
 BASE = "/api/v1/auth"
 
@@ -776,6 +776,358 @@ async def test_confirm_email_verification_success_resets_attempt_counter(
         )
     )
     assert result.scalars().all() == []  # el acierto borra los intentos previos
+
+
+# --- Recuperacion de contrasena (endpoints SIN autenticar) ----------------------
+
+
+async def test_request_password_reset_sends_code_for_existing_account(
+    client: AsyncClient, db_session: AsyncSession, email_backend
+):
+    await client.post(f"{BASE}/register", json=CREDS)
+
+    resp = await client.post(
+        f"{BASE}/password-reset/request",
+        json={"username_or_email": CREDS["username"]},
+    )
+    assert resp.status_code == 204
+    assert len(email_backend.sent) == 1
+    assert email_backend.sent[0]["to"] == CREDS["email"]
+    code = _extract_code(email_backend.sent[0]["body"])
+    assert re.fullmatch(r"\d{6}", code)
+
+    result = await db_session.execute(
+        select(User).where(User.username == CREDS["username"])
+    )
+    user = result.scalar_one()
+    assert user.password_reset_code_hash is not None
+    assert user.password_reset_code_expires_at is not None
+
+
+async def test_request_password_reset_by_email_also_works(
+    client: AsyncClient, email_backend
+):
+    await client.post(f"{BASE}/register", json=CREDS)
+
+    resp = await client.post(
+        f"{BASE}/password-reset/request",
+        json={"username_or_email": CREDS["email"]},
+    )
+    assert resp.status_code == 204
+    assert len(email_backend.sent) == 1
+
+
+async def test_request_password_reset_is_noop_for_unknown_account(
+    client: AsyncClient, email_backend
+):
+    resp = await client.post(
+        f"{BASE}/password-reset/request",
+        json={"username_or_email": "fantasma@nadie.com"},
+    )
+    assert resp.status_code == 204
+    assert email_backend.sent == []  # no hay cuenta, no se envia nada
+
+
+async def test_confirm_password_reset_with_correct_code_logs_in(
+    client: AsyncClient, email_backend
+):
+    await client.post(f"{BASE}/register", json=CREDS)
+    await client.post(
+        f"{BASE}/password-reset/request",
+        json={"username_or_email": CREDS["username"]},
+    )
+    code = _extract_code(email_backend.sent[-1]["body"])
+
+    resp = await client.post(
+        f"{BASE}/password-reset/confirm",
+        json={
+            "username_or_email": CREDS["username"],
+            "code": code,
+            "new_password": "nuevacontra1",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["token_type"] == "bearer"
+    assert body["access_token"] and body["refresh_token"]
+
+    # La contrasena vieja ya no sirve; la nueva si.
+    old = await client.post(
+        f"{BASE}/login",
+        json={"username_or_email": CREDS["username"], "password": CREDS["password"]},
+    )
+    assert old.status_code == 401
+    new = await client.post(
+        f"{BASE}/login",
+        json={"username_or_email": CREDS["username"], "password": "nuevacontra1"},
+    )
+    assert new.status_code == 200
+
+
+async def test_confirm_password_reset_wrong_code_returns_generic_error(
+    client: AsyncClient, email_backend
+):
+    await client.post(f"{BASE}/register", json=CREDS)
+    await client.post(
+        f"{BASE}/password-reset/request",
+        json={"username_or_email": CREDS["username"]},
+    )
+    real_code = _extract_code(email_backend.sent[-1]["body"])
+    wrong_code = "000000" if real_code != "000000" else "111111"
+
+    resp = await client.post(
+        f"{BASE}/password-reset/confirm",
+        json={
+            "username_or_email": CREDS["username"],
+            "code": wrong_code,
+            "new_password": "nuevacontra1",
+        },
+    )
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "invalid_code"
+
+    # No ha cambiado nada: la contrasena vieja sigue sirviendo.
+    still_old = await client.post(
+        f"{BASE}/login",
+        json={"username_or_email": CREDS["username"], "password": CREDS["password"]},
+    )
+    assert still_old.status_code == 200
+
+
+async def test_confirm_password_reset_unknown_account_returns_same_generic_error(
+    client: AsyncClient,
+):
+    # Mismo status y mismo detail que un codigo incorrecto para una cuenta
+    # real: no debe poder distinguirse "no existe" de "codigo incorrecto".
+    resp = await client.post(
+        f"{BASE}/password-reset/confirm",
+        json={
+            "username_or_email": "fantasma@nadie.com",
+            "code": "123456",
+            "new_password": "nuevacontra1",
+        },
+    )
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "invalid_code"
+
+
+async def test_confirm_password_reset_rejects_malformed_code(client: AsyncClient):
+    resp = await client.post(
+        f"{BASE}/password-reset/confirm",
+        json={
+            "username_or_email": "cualquiera@x.com",
+            "code": "12a456",
+            "new_password": "nuevacontra1",
+        },
+    )
+    assert resp.status_code == 422
+
+
+async def test_confirm_password_reset_expired_code_returns_generic_error(
+    client: AsyncClient, db_session: AsyncSession, email_backend
+):
+    await client.post(f"{BASE}/register", json=CREDS)
+    await client.post(
+        f"{BASE}/password-reset/request",
+        json={"username_or_email": CREDS["username"]},
+    )
+    code = _extract_code(email_backend.sent[-1]["body"])
+
+    result = await db_session.execute(
+        select(User).where(User.username == CREDS["username"])
+    )
+    user = result.scalar_one()
+    user.password_reset_code_expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    await db_session.commit()
+
+    resp = await client.post(
+        f"{BASE}/password-reset/confirm",
+        json={
+            "username_or_email": CREDS["username"],
+            "code": code,
+            "new_password": "nuevacontra1",
+        },
+    )
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "invalid_code"
+
+
+async def test_confirm_password_reset_blocks_after_five_failed_attempts(
+    client: AsyncClient, email_backend
+):
+    await client.post(f"{BASE}/register", json=CREDS)
+    await client.post(
+        f"{BASE}/password-reset/request",
+        json={"username_or_email": CREDS["username"]},
+    )
+    real_code = _extract_code(email_backend.sent[-1]["body"])
+    wrong_code = "000000" if real_code != "000000" else "111111"
+
+    for _ in range(5):
+        resp = await client.post(
+            f"{BASE}/password-reset/confirm",
+            json={
+                "username_or_email": CREDS["username"],
+                "code": wrong_code,
+                "new_password": "nuevacontra1",
+            },
+        )
+        assert resp.status_code == 401
+
+    # El 6o intento se bloquea por limite, aunque el codigo sea CORRECTO.
+    resp = await client.post(
+        f"{BASE}/password-reset/confirm",
+        json={
+            "username_or_email": CREDS["username"],
+            "code": real_code,
+            "new_password": "nuevacontra1",
+        },
+    )
+    assert resp.status_code == 429
+    assert resp.json()["detail"] == "too_many_attempts"
+
+
+async def test_confirm_password_reset_blocks_for_unknown_account_too(
+    client: AsyncClient,
+):
+    # El limite de intentos aplica IGUAL aunque la cuenta no exista: si no,
+    # la ausencia de bloqueo delataria que el email no esta registrado.
+    identifier = "fantasma@nadie.com"
+    for _ in range(5):
+        resp = await client.post(
+            f"{BASE}/password-reset/confirm",
+            json={
+                "username_or_email": identifier,
+                "code": "123456",
+                "new_password": "nuevacontra1",
+            },
+        )
+        assert resp.status_code == 401
+
+    resp = await client.post(
+        f"{BASE}/password-reset/confirm",
+        json={
+            "username_or_email": identifier,
+            "code": "123456",
+            "new_password": "nuevacontra1",
+        },
+    )
+    assert resp.status_code == 429
+    assert resp.json()["detail"] == "too_many_attempts"
+
+
+async def test_confirm_password_reset_new_code_does_not_reset_attempt_counter(
+    client: AsyncClient, email_backend
+):
+    await client.post(f"{BASE}/register", json=CREDS)
+    await client.post(
+        f"{BASE}/password-reset/request",
+        json={"username_or_email": CREDS["username"]},
+    )
+    first_code = _extract_code(email_backend.sent[-1]["body"])
+    wrong_code = "000000" if first_code != "000000" else "111111"
+
+    for _ in range(5):
+        await client.post(
+            f"{BASE}/password-reset/confirm",
+            json={
+                "username_or_email": CREDS["username"],
+                "code": wrong_code,
+                "new_password": "nuevacontra1",
+            },
+        )
+
+    # Piden un codigo NUEVO...
+    await client.post(
+        f"{BASE}/password-reset/request",
+        json={"username_or_email": CREDS["username"]},
+    )
+    new_code = _extract_code(email_backend.sent[-1]["body"])
+
+    # ...pero el limite sigue activo, incluso con el codigo nuevo y correcto.
+    resp = await client.post(
+        f"{BASE}/password-reset/confirm",
+        json={
+            "username_or_email": CREDS["username"],
+            "code": new_code,
+            "new_password": "nuevacontra1",
+        },
+    )
+    assert resp.status_code == 429
+    assert resp.json()["detail"] == "too_many_attempts"
+
+
+async def test_confirm_password_reset_success_resets_attempt_counter(
+    client: AsyncClient, db_session: AsyncSession, email_backend
+):
+    await client.post(f"{BASE}/register", json=CREDS)
+    await client.post(
+        f"{BASE}/password-reset/request",
+        json={"username_or_email": CREDS["username"]},
+    )
+    real_code = _extract_code(email_backend.sent[-1]["body"])
+    wrong_code = "000000" if real_code != "000000" else "111111"
+
+    for _ in range(3):
+        await client.post(
+            f"{BASE}/password-reset/confirm",
+            json={
+                "username_or_email": CREDS["username"],
+                "code": wrong_code,
+                "new_password": "nuevacontra1",
+            },
+        )
+    resp = await client.post(
+        f"{BASE}/password-reset/confirm",
+        json={
+            "username_or_email": CREDS["username"],
+            "code": real_code,
+            "new_password": "nuevacontra1",
+        },
+    )
+    assert resp.status_code == 200
+
+    result = await db_session.execute(
+        select(PasswordResetAttempt).where(
+            PasswordResetAttempt.identifier == CREDS["username"]
+        )
+    )
+    assert result.scalars().all() == []  # el acierto borra los intentos previos
+
+
+async def test_confirm_password_reset_inactive_account_returns_403(
+    client: AsyncClient, db_session: AsyncSession, email_backend
+):
+    await client.post(f"{BASE}/register", json=CREDS)
+    await client.post(
+        f"{BASE}/password-reset/request",
+        json={"username_or_email": CREDS["username"]},
+    )
+    code = _extract_code(email_backend.sent[-1]["body"])
+
+    result = await db_session.execute(
+        select(User).where(User.username == CREDS["username"])
+    )
+    user = result.scalar_one()
+    user.is_active = False
+    await db_session.commit()
+
+    resp = await client.post(
+        f"{BASE}/password-reset/confirm",
+        json={
+            "username_or_email": CREDS["username"],
+            "code": code,
+            "new_password": "nuevacontra1",
+        },
+    )
+    assert resp.status_code == 403
+
+    # La contrasena SI ha cambiado (solo se bloquea la emision de tokens).
+    still_works = await client.post(
+        f"{BASE}/login",
+        json={"username_or_email": CREDS["username"], "password": "nuevacontra1"},
+    )
+    assert still_works.status_code == 403  # inactivo tambien bloquea el login normal
 
 
 # --- /me (endpoint protegido) --------------------------------------------------

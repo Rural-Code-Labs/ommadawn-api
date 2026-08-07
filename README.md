@@ -182,6 +182,8 @@ Se manejan **dos tokens con roles distintos**:
 | `POST` | `/api/v1/auth/register` | — | Crea un usuario (devuelve el perfil, `201`) |
 | `POST` | `/api/v1/auth/login` | — | Login por username **o** email; devuelve el par de tokens |
 | `POST` | `/api/v1/auth/google` | — | Login/registro con Google (ID token verificado); mismo par de tokens que `/login`. `409` (`detail: "email_conflict"`) si el email ya pertenece a una cuenta por contraseña |
+| `POST` | `/api/v1/auth/password-reset/request` | — | Envía un código de 6 dígitos si `username_or_email` corresponde a una cuenta (`204` en todos los casos, exista o no) |
+| `POST` | `/api/v1/auth/password-reset/confirm` | — | Confirma el código y establece `new_password`; loguea automáticamente (mismo par de tokens que `/login`) |
 | `POST` | `/api/v1/auth/refresh` | — | Rota el refresh token y emite un par nuevo |
 | `POST` | `/api/v1/auth/logout` | 🔒 | Revoca el refresh token (`204`) |
 | `GET` | `/api/v1/auth/me` | 🔒 | Devuelve el usuario autenticado |
@@ -299,6 +301,33 @@ ninguna página HTML, todo queda en JSON + la app.
 `UserRead` incluye `email_verified: bool`: `false` por defecto en el
 registro por contraseña, `true` desde el alta en cuentas creadas por Google
 (su email ya lo verificó Google).
+
+### Recuperar contraseña
+
+Mismo patrón que la verificación de email (código de 6 dígitos, no enlace),
+pero **sin autenticar** — es justo el caso de estar deslogueado — y con dos
+matices de seguridad propios de un flujo público:
+
+- **`POST /auth/password-reset/request`** recibe
+  `{"username_or_email": "..."}` y responde **siempre `204`**, exista o no
+  la cuenta: la respuesta no puede delatar qué emails están registrados. Si
+  existe, envía un código (caduca en 2h) al email de la cuenta.
+- **`POST /auth/password-reset/confirm`** recibe
+  `{"username_or_email": "...", "code": "123456", "new_password": "..."}`:
+  - Máximo 5 intentos fallidos en una ventana móvil de 24h, igual que la
+    verificación de email, pero contados por `username_or_email` — el
+    límite aplica **también si la cuenta no existe**, para que ni el
+    bloqueo por límite delate su registro.
+  - "Cuenta no encontrada" y "código incorrecto/caducado" dan **el mismo**
+    `401` con `{"detail": "invalid_code"}`: nunca se distingue cuál de los
+    dos fue.
+  - Si todo coincide, cambia la contraseña **y loguea automáticamente**:
+    responde el mismo `TokenPair` que `/login`, para que la app no tenga
+    que pedir un segundo login tras recuperar el acceso.
+
+No hay ningún middleware de autenticación del lado de la API que excluir:
+la protección es siempre por endpoint (`Depends(get_current_user)`), así
+que estos dos simplemente no lo llevan, igual que `/register` o `/login`.
 
 ### Flujo: del login al logout
 

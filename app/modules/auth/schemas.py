@@ -87,6 +87,30 @@ class EmailVerificationConfirm(BaseModel):
     code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
 
 
+class PasswordResetRequest(BaseModel):
+    """Body de POST /auth/password-reset/request.
+
+    Mismo campo (y mismo nombre) que `LoginRequest.username_or_email`, por
+    consistencia: es el mismo dato, la cuenta a la que se refiere el usuario,
+    solo que aqui no hay contrasena porque es justo lo que se ha olvidado.
+    """
+
+    username_or_email: str
+
+
+class PasswordResetConfirm(BaseModel):
+    """Body de POST /auth/password-reset/confirm.
+
+    Sin autenticar (el usuario esta deslogueado): por eso lleva de nuevo
+    `username_or_email`, no se puede identificar la cuenta de ninguna otra
+    forma. `new_password` con las mismas reglas que en el registro.
+    """
+
+    username_or_email: str
+    code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+    new_password: str = Field(min_length=8, max_length=128)
+
+
 class UserUpdate(BaseModel):
     """Datos de perfil editables por el propio usuario (body de PATCH /auth/me).
 

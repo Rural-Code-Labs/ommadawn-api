@@ -61,6 +61,10 @@ mantenerse estable y bien versionado.
   `/confirm`, con límite de 5 intentos fallidos en ventana móvil de 24h. `EmailBackend`
   (`app/core/email.py`) es el mismo patrón puerto/adaptador que `StorageBackend`: solo
   `ConsoleEmailBackend` (log) por ahora, un proveedor real queda pendiente.
+- **Recuperación de contraseña (ver sección propia más abajo, tarea 5.6)**: mismo patrón de
+  código de 6 dígitos, pero sin autenticar (`POST /auth/password-reset/request` + `/confirm`),
+  con dos matices de seguridad: no revela si una cuenta existe (ni por respuesta ni por límite
+  de intentos) y, al acertar, loguea automáticamente (mismo `TokenPair` que `/login`).
 
 ---
 
@@ -145,8 +149,8 @@ ommadawn-api/
 │   │   ├── email.py            # EmailBackend (Console ahora; SMTP/SendGrid pendiente)
 │   │   └── country_codes.py    # Lista ISO 3166-1 alpha-2 + validate_country_code (compartido)
 │   └── modules/
-│       ├── auth/               # ✅ Fases 2-4 (bloque cerrado) + Google/verificación (5.1-5.5)
-│       │   ├── models.py       # User, RefreshToken, EmailVerificationAttempt
+│       ├── auth/               # ✅ Fases 2-4 (bloque cerrado) + Google/verificación/reset (5.1-5.6)
+│       │   ├── models.py       # User, RefreshToken, EmailVerificationAttempt, PasswordResetAttempt
 │       │   ├── schemas.py      # Contratos Pydantic (request/response)
 │       │   ├── service.py      # Lógica: registro, login, tokens, rotación, Google, email
 │       │   ├── dependencies.py # get_current_user, require_admin (protegen endpoints)
@@ -494,6 +498,57 @@ no sirve ninguna página HTML, todo queda en JSON + la app.
   el cuerpo del correo — los tests sacan el código de ahí con una regex, igual que la app real
   lo sacaría del correo recibido. Mismo patrón que `LocalStorageBackend` apuntando a una
   carpeta temporal en los tests de avatar/imágenes.
+
+---
+
+## Recuperación de contraseña
+
+`POST /auth/password-reset/request` + `/confirm` (tarea 5.6 del backlog): mismo patrón que
+verificación de email (código de 6 dígitos, no enlace), pero **sin autenticar** — es justo el
+caso de estar deslogueado — con dos matices de seguridad propios de un endpoint público:
+**no debe poder averiguarse por la respuesta (ni por límite de intentos) qué emails/usernames
+están registrados.**
+
+- **Constantes compartidas, renombradas**: `VERIFICATION_CODE_EXPIRES_AFTER` (2h),
+  `VERIFICATION_ATTEMPTS_WINDOW` (24h) y `VERIFICATION_MAX_ATTEMPTS` (5) — antes tenían el
+  prefijo `EMAIL_VERIFICATION_`, generalizadas al añadir este flujo porque comparten política
+  exacta con la verificación de email; duplicar los números arriesgaba que divergieran sin
+  querer con el tiempo. Igual con la excepción `too_many_verification_attempts_exception` →
+  **`too_many_code_attempts_exception`**, ahora compartida por los dos `/confirm`.
+- **`User.password_reset_code_hash` / `_expires_at`**: mismo diseño que el par de verificación
+  de email (hash + caducidad, sobrescribible), pero en sus PROPIAS columnas — son conceptos
+  distintos (verificar el email vs. demostrar que sigues siendo el dueño de la cuenta) y pueden
+  tener un código pendiente cada uno a la vez sin pisarse. Migración `5f145a02d004`, sin
+  `server_default` (todo nullable, no hace falta backfill).
+- **`PasswordResetAttempt` NO tiene FK a `users`** — a diferencia de `EmailVerificationAttempt`.
+  Se cuenta por `identifier` (el `username_or_email` tal cual se envió), no por `user_id`:
+  el límite de intentos tiene que aplicar TAMBIÉN cuando la cuenta no existe, y no puede haber
+  un `user_id` para una cuenta que no existe. Es la pieza clave que permite que "5 intentos
+  fallidos" bloquee igual a un atacante probando contra un email real que contra uno inventado.
+- **`invalid_password_reset_exception`**: excepción PROPIA (no reutiliza
+  `invalid_verification_code_exception` directamente, aunque comparten el mismo `detail:
+  "invalid_code"`) porque aquí fusiona a propósito "cuenta no existe" con "código incorrecto/
+  caducado" — algo que no aplica a la verificación de email (ahí el usuario ya está
+  autenticado, la cuenta siempre existe). `service.confirm_password_reset` calcula el hash del
+  código enviado **siempre**, exista o no la cuenta (`hash_verification_code(data.code)` antes
+  de mirar si `user is None`), para no delatar la diferencia por timing tampoco ahí.
+- **`request_password_reset` hace el mismo "trabajo de mentira"** (generar y hashear un código
+  que se descarta) cuando la cuenta no existe, por el mismo motivo. Mitigación PARCIAL y
+  documentada como tal en el código: con un backend de email real (I/O de red), la rama que sí
+  envía seguiría siendo más lenta — resolver eso del todo es un problema mayor, fuera de
+  alcance aquí.
+- **Éxito → login automático**: `confirm_password_reset` devuelve el mismo `TokenPair` que
+  `login_user` (via el helper compartido `_issue_token_pair`), para que la app no tenga que
+  pedir un segundo login tras recuperar el acceso. Antes de emitir tokens comprueba
+  `user.is_active` (mismo criterio que `login_user`): una cuenta desactivada SÍ puede cambiar
+  su contraseña por este flujo (ya demostró ser su dueña con el código), pero no recibe sesión
+  — evita que este endpoint sea una vía para saltarse una desactivación/baneo.
+- **Sin `AuthMiddleware` que excluir**: la API no tiene ningún middleware global de
+  autenticación (`grep add_middleware` en `app/` no devuelve nada) — la protección es siempre
+  por endpoint, vía `Depends(get_current_user)` en cada ruta. Estos dos endpoints simplemente
+  no llevan esa dependencia, igual que `/register`, `/login` o `/google`. Del lado de la app
+  (`AuthMiddleware.swift`) sí hay que añadirlos a la exclusión — eso es responsabilidad del
+  repo de la app, no de este.
 
 ---
 

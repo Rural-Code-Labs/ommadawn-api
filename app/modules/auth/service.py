@@ -31,10 +31,11 @@ from app.core.exceptions import (
     inactive_user_exception,
     invalid_current_password_exception,
     invalid_google_token_exception,
+    invalid_password_reset_exception,
     invalid_refresh_token_exception,
     invalid_verification_code_exception,
     password_only_access_exception,
-    too_many_verification_attempts_exception,
+    too_many_code_attempts_exception,
     username_already_set_exception,
     username_taken_exception,
 )
@@ -49,9 +50,15 @@ from app.core.security import (
     verify_password,
 )
 from app.core.storage import StorageBackend, validate_image_upload
-from app.modules.auth.models import EmailVerificationAttempt, RefreshToken, User
+from app.modules.auth.models import (
+    EmailVerificationAttempt,
+    PasswordResetAttempt,
+    RefreshToken,
+    User,
+)
 from app.modules.auth.schemas import (
     EmailVerificationConfirm,
+    PasswordResetConfirm,
     PasswordUpdate,
     TokenPair,
     UserCreate,
@@ -73,12 +80,15 @@ user_not_found_exception = HTTPException(
 # `TokenPair.expires_in` para que pueda renovar de forma proactiva.
 ACCESS_TOKEN_EXPIRES_IN = settings.access_token_expire_minutes * 60
 
-# Cuanto vive un codigo de verificacion de email desde que se pide.
-EMAIL_VERIFICATION_CODE_EXPIRES_AFTER = timedelta(hours=2)
+# Cuanto vive un codigo de 6 digitos desde que se pide. Compartido por
+# verificacion de email Y recuperacion de contrasena: misma politica, mismo
+# valor, para no arriesgarse a que diverjan sin querer.
+VERIFICATION_CODE_EXPIRES_AFTER = timedelta(hours=2)
 # Ventana MOVIL para contar intentos fallidos (no se reinicia al pedir un
-# codigo nuevo, ver EmailVerificationAttempt) y cuantos se toleran dentro.
-EMAIL_VERIFICATION_ATTEMPTS_WINDOW = timedelta(hours=24)
-EMAIL_VERIFICATION_MAX_ATTEMPTS = 5
+# codigo nuevo, ver EmailVerificationAttempt/PasswordResetAttempt) y cuantos
+# se toleran dentro. Tambien compartida por ambos flujos.
+VERIFICATION_ATTEMPTS_WINDOW = timedelta(hours=24)
+VERIFICATION_MAX_ATTEMPTS = 5
 
 
 def _build_refresh_token(session: AsyncSession, user_id: int) -> str:
@@ -571,7 +581,7 @@ async def request_email_verification(
     code = generate_verification_code()
     user.email_verification_code_hash = hash_verification_code(code)
     user.email_verification_code_expires_at = (
-        datetime.now(timezone.utc) + EMAIL_VERIFICATION_CODE_EXPIRES_AFTER
+        datetime.now(timezone.utc) + VERIFICATION_CODE_EXPIRES_AFTER
     )
 
     await backend.send(
@@ -586,8 +596,9 @@ async def request_email_verification(
 
 
 async def _count_recent_verification_attempts(session: AsyncSession, user_id: int) -> int:
-    """Cuenta los intentos fallidos del usuario en la ventana movil de 24h."""
-    window_start = datetime.now(timezone.utc) - EMAIL_VERIFICATION_ATTEMPTS_WINDOW
+    """Cuenta los intentos fallidos de verificacion de email del usuario en la
+    ventana movil de 24h."""
+    window_start = datetime.now(timezone.utc) - VERIFICATION_ATTEMPTS_WINDOW
     result = await session.execute(
         select(func.count())
         .select_from(EmailVerificationAttempt)
@@ -608,7 +619,7 @@ async def confirm_email_verification(
     el codigo en si — asi un atacante bloqueado por el limite no puede seguir
     usando la respuesta para distinguir codigos validos de invalidos):
       1. >= 5 intentos fallidos en las ultimas 24h -> 429
-         (`too_many_verification_attempts_exception`), sin comprobar el codigo.
+         (`too_many_code_attempts_exception`), sin comprobar el codigo.
       2. El codigo no coincide, ha caducado, o no habia ninguno pendiente ->
          se registra un intento fallido (fila nueva) y 401
          (`invalid_verification_code_exception`).
@@ -617,10 +628,8 @@ async def confirm_email_verification(
          (el contador se resetea solo al acertar, no al pedir un codigo
          nuevo).
     """
-    if await _count_recent_verification_attempts(session, user.id) >= (
-        EMAIL_VERIFICATION_MAX_ATTEMPTS
-    ):
-        raise too_many_verification_attempts_exception
+    if await _count_recent_verification_attempts(session, user.id) >= VERIFICATION_MAX_ATTEMPTS:
+        raise too_many_code_attempts_exception
 
     is_valid = (
         user.email_verification_code_hash is not None
@@ -642,6 +651,126 @@ async def confirm_email_verification(
         )
     )
     await session.commit()
+
+
+# --- Recuperacion de contrasena ----------------------------------------------------
+
+
+async def request_password_reset(
+    session: AsyncSession, backend: EmailBackend, username_or_email: str
+) -> None:
+    """Genera un codigo de recuperacion y lo envia por email, SI la cuenta existe.
+
+    Responde igual (nada, 204 desde el router) exista o no la cuenta: no debe
+    poder averiguarse por la respuesta que emails estan registrados. Si no
+    existe, se hace un trabajo equivalente (generar y hashear un codigo que se
+    descarta) para no delatarlo tampoco por timing — mitigacion parcial: con
+    un backend de email real (I/O de red), la rama que SI envia seguiria
+    siendo mas lenta; evitar eso del todo es un problema mayor, fuera de
+    alcance aqui.
+
+    Guardar el codigo nuevo SOBRESCRIBE el anterior (mismas dos columnas en
+    `User` que la verificacion de email, pero en su propio par
+    `password_reset_code_*`), invalidando cualquier codigo pendiente previo.
+    El commit ocurre DESPUES de enviar el correo con exito, mismo motivo que
+    `request_email_verification`.
+    """
+    user = await _get_by_username_or_email(session, username_or_email)
+    if user is None:
+        hash_verification_code(generate_verification_code())
+        return
+
+    code = generate_verification_code()
+    user.password_reset_code_hash = hash_verification_code(code)
+    user.password_reset_code_expires_at = (
+        datetime.now(timezone.utc) + VERIFICATION_CODE_EXPIRES_AFTER
+    )
+
+    await backend.send(
+        to=user.email,
+        subject="Recupera tu contrasena en Ommadawn",
+        body=(
+            f"Tu codigo para restablecer la contrasena es {code}. "
+            "Caduca en 2 horas. Si no lo has pedido tu, ignora este correo."
+        ),
+    )
+    await session.commit()
+
+
+async def _count_recent_password_reset_attempts(session: AsyncSession, identifier: str) -> int:
+    """Cuenta los intentos fallidos de recuperacion de contrasena para un
+    `username_or_email` en la ventana movil de 24h.
+
+    A diferencia de `_count_recent_verification_attempts` (por `user_id`),
+    aqui se cuenta por el IDENTIFICADOR TAL CUAL se envio: el limite tiene que
+    aplicar tambien cuando la cuenta no existe (no hay `user_id` posible), asi
+    que no puede depender de una FK a `users`.
+    """
+    window_start = datetime.now(timezone.utc) - VERIFICATION_ATTEMPTS_WINDOW
+    result = await session.execute(
+        select(func.count())
+        .select_from(PasswordResetAttempt)
+        .where(
+            PasswordResetAttempt.identifier == identifier,
+            PasswordResetAttempt.created_at > window_start,
+        )
+    )
+    return result.scalar_one()
+
+
+async def confirm_password_reset(
+    session: AsyncSession, data: PasswordResetConfirm
+) -> TokenPair:
+    """Confirma un codigo de recuperacion, establece `new_password` y loguea
+    automaticamente (mismo `TokenPair` que `login_user`).
+
+    Mismo orden que `confirm_email_verification` (limite primero), con dos
+    diferencias de seguridad propias de un flujo SIN autenticar:
+      1. El limite de intentos se cuenta por `username_or_email` (ver
+         `_count_recent_password_reset_attempts`), no por `user_id`: aplica
+         IGUAL si la cuenta no existe, para no revelar nada tampoco por ahi.
+      2. "Cuenta inexistente" y "codigo invalido/caducado" dan el MISMO error
+         (`invalid_password_reset_exception`, 401) — nunca se distingue cual
+         de los dos fue. El hash del codigo enviado se calcula SIEMPRE, exista
+         o no la cuenta, para no delatar la diferencia por timing.
+    """
+    if await _count_recent_password_reset_attempts(
+        session, data.username_or_email
+    ) >= VERIFICATION_MAX_ATTEMPTS:
+        raise too_many_code_attempts_exception
+
+    user = await _get_by_username_or_email(session, data.username_or_email)
+    submitted_hash = hash_verification_code(data.code)  # siempre, exista o no la cuenta
+
+    is_valid = (
+        user is not None
+        and user.password_reset_code_hash is not None
+        and user.password_reset_code_expires_at is not None
+        and not _is_past(user.password_reset_code_expires_at)
+        and submitted_hash == user.password_reset_code_hash
+    )
+    if not is_valid:
+        session.add(PasswordResetAttempt(identifier=data.username_or_email))
+        await session.commit()
+        raise invalid_password_reset_exception
+
+    user.hashed_password = hash_password(data.new_password)
+    user.password_reset_code_hash = None
+    user.password_reset_code_expires_at = None
+    await session.execute(
+        delete(PasswordResetAttempt).where(
+            PasswordResetAttempt.identifier == data.username_or_email
+        )
+    )
+    await session.commit()
+
+    # Mismo criterio que login_user: una cuenta desactivada no recibe tokens,
+    # aunque el codigo fuera correcto (evita que restablecer la contrasena
+    # sea una via para saltarse una desactivacion).
+    if not user.is_active:
+        raise inactive_user_exception
+
+    return await _issue_token_pair(session, user.id)
 
 
 # --- Administracion de usuarios (superadmin) --------------------------------------

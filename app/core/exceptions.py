@@ -146,12 +146,14 @@ password_only_access_exception = HTTPException(
     detail="password_only_access",
 )
 
-# 429 -> POST /auth/verify-email/confirm: 5 intentos fallidos ya consumidos en
-# las ultimas 24h (ventana movil: no se resetea al pedir un codigo nuevo, solo
-# al acertar o al ir "envejeciendo" los intentos antiguos fuera de la
-# ventana). Se rechaza SIN comprobar el codigo enviado, para no filtrar por
-# temporizacion si el codigo era correcto o no una vez bloqueado.
-too_many_verification_attempts_exception = HTTPException(
+# 429 -> POST /auth/verify-email/confirm Y /auth/password-reset/confirm (los
+# dos flujos de "codigo de 6 digitos" comparten esta excepcion): 5 intentos
+# fallidos ya consumidos en las ultimas 24h (ventana movil: no se resetea al
+# pedir un codigo nuevo, solo al acertar o al ir "envejeciendo" los intentos
+# antiguos fuera de la ventana). Se rechaza SIN comprobar el codigo enviado,
+# para no filtrar por temporizacion si el codigo era correcto o no una vez
+# bloqueado.
+too_many_code_attempts_exception = HTTPException(
     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
     detail="too_many_attempts",
 )
@@ -161,6 +163,20 @@ too_many_verification_attempts_exception = HTTPException(
 # generico para los tres casos (mismo criterio que credentials_exception): no
 # hay motivo para que la app sepa CUAL de los tres fue.
 invalid_verification_code_exception = HTTPException(
+    status_code=status.HTTP_401_UNAUTHORIZED,
+    detail="invalid_code",
+)
+
+# 401 -> POST /auth/password-reset/confirm: el codigo no coincide, ha
+# caducado, o (a diferencia de invalid_verification_code_exception) la cuenta
+# (`username_or_email`) NI SIQUIERA EXISTE. Las tres situaciones dan el MISMO
+# error a proposito: este endpoint va SIN autenticar, asi que si "cuenta no
+# encontrada" respondiera distinto de "codigo incorrecto", cualquiera podria
+# usarlo para averiguar que emails/usernames estan registrados probando codigos
+# al azar. Mismo `detail` que invalid_verification_code_exception (misma idea,
+# "codigo invalido"), pero es una excepcion propia: la fusion con "no existe"
+# es especifica de este flujo sin autenticar, no de la verificacion de email.
+invalid_password_reset_exception = HTTPException(
     status_code=status.HTTP_401_UNAUTHORIZED,
     detail="invalid_code",
 )

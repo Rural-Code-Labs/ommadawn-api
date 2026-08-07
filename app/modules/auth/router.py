@@ -23,6 +23,8 @@ from app.modules.auth.schemas import (
     EmailVerificationConfirm,
     GoogleLoginRequest,
     LoginRequest,
+    PasswordResetConfirm,
+    PasswordResetRequest,
     PasswordUpdate,
     RefreshRequest,
     TokenPair,
@@ -120,12 +122,13 @@ _PASSWORD_ONLY_ACCESS = {
         '"password_only_access" (no una frase).'
     ),
 }
-_TOO_MANY_VERIFICATION_ATTEMPTS = {
+_TOO_MANY_CODE_ATTEMPTS = {
     "model": ErrorMessage,
     "description": (
         "5 intentos fallidos ya consumidos en las ultimas 24h (ventana movil, "
         "no se resetea al pedir un codigo nuevo). `detail` es el codigo "
-        '"too_many_attempts". El codigo enviado NO se comprueba en este caso.'
+        '"too_many_attempts". El codigo enviado NO se comprueba en este caso. '
+        "Compartido por verify-email/confirm y password-reset/confirm."
     ),
 }
 _INVALID_VERIFICATION_CODE = {
@@ -133,6 +136,15 @@ _INVALID_VERIFICATION_CODE = {
     "description": (
         "Falta el access token o no es valido, O el codigo no coincide/ha "
         'caducado. `detail` es el codigo "invalid_code" en el segundo caso.'
+    ),
+}
+_INVALID_PASSWORD_RESET = {
+    "model": ErrorMessage,
+    "description": (
+        "El codigo no coincide, ha caducado, o la cuenta (`username_or_email`) "
+        'NO EXISTE -- el MISMO error para los tres casos (`detail: "invalid_code"`), '
+        "para que este endpoint sin autenticar no pueda usarse para averiguar "
+        "que emails/usernames estan registrados."
     ),
 }
 
@@ -409,7 +421,7 @@ async def request_email_verification(
     summary="Confirmar el codigo de verificacion de email",
     responses={
         status.HTTP_401_UNAUTHORIZED: _INVALID_VERIFICATION_CODE,
-        status.HTTP_429_TOO_MANY_REQUESTS: _TOO_MANY_VERIFICATION_ATTEMPTS,
+        status.HTTP_429_TOO_MANY_REQUESTS: _TOO_MANY_CODE_ATTEMPTS,
     },
 )
 async def confirm_email_verification(
@@ -421,6 +433,50 @@ async def confirm_email_verification(
     una ventana movil de 24h (compartida entre codigos, no se resetea al
     pedir uno nuevo); si se supera, `429` sin llegar a comprobar el codigo."""
     await service.confirm_email_verification(session, current_user, data)
+
+
+# --- Recuperacion de contrasena (SIN autenticar: el usuario esta deslogueado) ------
+
+
+@router.post(
+    "/password-reset/request",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Pedir un codigo para restablecer la contrasena",
+)
+async def request_password_reset(
+    data: PasswordResetRequest,
+    session: AsyncSession = Depends(get_session),
+    backend: EmailBackend = Depends(get_email_backend),
+) -> None:
+    """Envia un codigo de 6 digitos (caduca en 2h) al email de la cuenta, si
+    `username_or_email` corresponde a una. Responde `204` en TODOS los casos
+    (exista o no la cuenta): la respuesta no puede delatar que emails estan
+    registrados."""
+    await service.request_password_reset(session, backend, data.username_or_email)
+
+
+@router.post(
+    "/password-reset/confirm",
+    response_model=TokenPair,
+    summary="Confirmar el codigo y establecer una contrasena nueva",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: _INVALID_PASSWORD_RESET,
+        status.HTTP_429_TOO_MANY_REQUESTS: _TOO_MANY_CODE_ATTEMPTS,
+    },
+)
+async def confirm_password_reset(
+    data: PasswordResetConfirm,
+    session: AsyncSession = Depends(get_session),
+) -> TokenPair:
+    """Verifica el codigo, establece `new_password` y loguea automaticamente
+    (mismo `TokenPair` que `POST /auth/login`): la app no tiene que pedir un
+    segundo login tras recuperar el acceso.
+
+    Maximo 5 intentos fallidos en una ventana movil de 24h, contados por
+    `username_or_email` (aplica IGUAL si la cuenta no existe). "Cuenta
+    inexistente" y "codigo invalido/caducado" dan el MISMO `401`, para no
+    revelar cual de los dos fue."""
+    return await service.confirm_password_reset(session, data)
 
 
 # --- Administracion de usuarios (requiere SUPERadministrador) ---------------------
