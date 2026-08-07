@@ -1302,6 +1302,38 @@ async def test_collection_detail_includes_release_info_and_cover(
     assert row["cover_url"] == cover_url
 
 
+async def test_edition_read_exposes_its_collections(
+    client: AsyncClient, db_session: AsyncSession
+):
+    # Relacion inversa: EditionRead.collections debe reflejar en que
+    # colecciones esta esa edicion (0, 1 o varias), sin repetir
+    # edition_count/sample_cover_urls (eso vive en CollectionListRead).
+    headers = await _admin_headers(client, db_session)
+    release_id, edition_id = await _create_release_with_edition(
+        client, headers, title="Tubular Bells"
+    )
+
+    # Sin colecciones todavia.
+    release = (await client.get(f"{BASE}/releases/{release_id}")).json()
+    assert release["editions"][0]["collections"] == []
+
+    hdcd_id = await _create_collection(client, headers, "Remasterizaciones HDCD")
+    boxed_id = await _create_collection(client, headers, "Boxed")
+    for collection_id in (hdcd_id, boxed_id):
+        await client.post(
+            f"{BASE}/collections/{collection_id}/editions",
+            json={"edition_id": edition_id},
+            headers=headers,
+        )
+
+    release = (await client.get(f"{BASE}/releases/{release_id}")).json()
+    collections = release["editions"][0]["collections"]
+    assert {c["id"] for c in collections} == {hdcd_id, boxed_id}
+    assert {c["name"] for c in collections} == {"Remasterizaciones HDCD", "Boxed"}
+    # Shape minimo: solo id + name, nada de edition_count/sample_cover_urls.
+    assert set(collections[0].keys()) == {"id", "name"}
+
+
 async def test_collection_list_edition_count_and_sample_covers(
     client: AsyncClient, db_session: AsyncSession
 ):

@@ -437,6 +437,11 @@ Como en `GET .../collections/{id}` cada fila puede pertenecer a una obra distint
 edición incluye `release_id`/`release_title`/`release_type` además de sus propios datos
 (`edition_name`, `cover_url`).
 
+En sentido inverso, `EditionRead.collections` (dentro de `GET /releases/{id}` y
+`GET .../editions`) lista las colecciones a las que pertenece esa edición — un shape
+mínimo (`id` + `name`, sin repetir `edition_count`/`sample_cover_urls`), pensado para
+precargar los tags del formulario de edición y para un enlace "Parte de: X" en su detalle.
+
 **Tracks**: cada `Track` referencia una `Recording` (por `recording_id`). Al crear/editar una
 edición, cada tema del array `tracks` acepta dos formas:
 - **Grabación nueva**: `title` (+ `duration_seconds`, `credits` opcionales), `position`, `disc_number` (default 1), `side` (nullable, solo vinilos: `"A"`, `"B"`…).

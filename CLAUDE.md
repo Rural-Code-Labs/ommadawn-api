@@ -789,6 +789,17 @@ país/sello/fecha/formato propios.
 - **Crear una colección reutiliza el patrón de `Label`** (`session.add` + `commit` +
   capturar `IntegrityError` del `UNIQUE` de BD → 409), no un `SELECT` previo por nombre: más
   robusto ante condiciones de carrera que buscar-antes-de-insertar.
+- **`EditionRead.collections` (relación INVERSA, campo pedido a posteriori)**: qué
+  colecciones incluyen esta edición — precarga los tags del formulario de edición en la app
+  y sirve para un enlace "Parte de: X" en su detalle. Shape `CollectionSummaryRead` (solo
+  `id` + `name`), deliberadamente MÁS LIGERO que `CollectionListRead`: no repite
+  `edition_count`/`sample_cover_urls` (datos del listado de colecciones, no de una edición
+  concreta) ni obliga a calcularlos en cada carga de una edición. Requirió añadir
+  `selectinload(Edition.collections)` a `_RELEASE_WITH_EDITIONS`/`_EDITION_WITH_CHILDREN`
+  (mismo sitio que `Edition.label`) y `"collections"` a los `session.refresh(edition,
+  attribute_names=[...])` de `create_edition`/`update_edition` — sin ninguno de los dos,
+  acceder a `edition.collections` tras crear/editar habría disparado un lazy-load asíncrono
+  no soportado. Sin migración: reutiliza la relación `Edition.collections` que ya existía.
 
 ---
 

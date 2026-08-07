@@ -71,11 +71,13 @@ _RELEASE_WITH_EDITIONS = (
     selectinload(Release.editions).selectinload(Edition.tracks).selectinload(Track.recording),
     selectinload(Release.editions).selectinload(Edition.images),
     selectinload(Release.editions).selectinload(Edition.label),
+    selectinload(Release.editions).selectinload(Edition.collections),
 )
 _EDITION_WITH_CHILDREN = (
     selectinload(Edition.tracks).selectinload(Track.recording),
     selectinload(Edition.images),
     selectinload(Edition.label),
+    selectinload(Edition.collections),
 )
 
 
@@ -242,7 +244,7 @@ async def create_edition(
     )
     session.add(edition)
     await session.commit()
-    await session.refresh(edition, attribute_names=["tracks", "images", "label"])
+    await session.refresh(edition, attribute_names=["tracks", "images", "label", "collections"])
     return edition
 
 
@@ -279,7 +281,7 @@ async def update_edition(
         setattr(edition, field, value)
 
     await session.commit()
-    await session.refresh(edition, attribute_names=["tracks", "images", "label"])
+    await session.refresh(edition, attribute_names=["tracks", "images", "label", "collections"])
     return edition
 
 

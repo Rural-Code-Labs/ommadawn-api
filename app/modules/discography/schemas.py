@@ -269,6 +269,21 @@ class ImageMoveRequest(BaseModel):
     direction: Literal["up", "down"]
 
 
+class CollectionSummaryRead(BaseModel):
+    """Vista MINIMA de una coleccion: solo `id` + `name`, para colgarla de
+    `EditionRead.collections` (que colecciones incluyen esta edicion).
+
+    Deliberadamente mas ligera que `CollectionListRead`: no repite
+    `edition_count`/`sample_cover_urls` (datos del LISTADO de colecciones, sin
+    sentido aqui) ni obliga a calcularlos en cada carga de una edicion.
+    """
+
+    id: int
+    name: str
+
+    model_config = {"from_attributes": True}
+
+
 class EditionRead(BaseModel):
     """Vista publica de una edicion, con su tracklist e imagenes incluidas."""
 
@@ -286,6 +301,10 @@ class EditionRead(BaseModel):
     is_primary: bool
     tracks: list[TrackRead]
     images: list[ImageRead]
+    # Relacion inversa a CollectionDetailRead.editions: en que colecciones
+    # aparece esta edicion (0, 1 o varias). Precarga los tags del formulario
+    # de edicion en la app, y sirve para el enlace "Parte de: X" en su detalle.
+    collections: list[CollectionSummaryRead]
 
     model_config = {"from_attributes": True}
 
