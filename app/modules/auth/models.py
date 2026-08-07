@@ -110,6 +110,28 @@ class User(Base):
         String(255), unique=True, index=True, nullable=True
     )
 
+    # --- Verificacion de email ---
+    # False por defecto (registro por contrasena: el email no se ha
+    # comprobado). True desde el alta para cuentas creadas por Google, porque
+    # el ID token ya trae `email_verified: true` verificado por Google (ver
+    # service.google_login, que exige ese campo antes de dar de alta a
+    # nadie). Not nullable: siempre hay un valor concreto.
+    email_verified: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    # Hash SHA-256 del codigo de verificacion PENDIENTE (ver
+    # security.hash_verification_code), no el codigo en claro. Nullable: la
+    # mayoria de usuarios no tienen ningun codigo pendiente. Pedir un codigo
+    # nuevo (POST /auth/verify-email/request) SOBRESCRIBE este par de
+    # columnas -> asi se "invalida" automaticamente cualquier codigo anterior,
+    # sin necesitar una tabla de historico.
+    email_verification_code_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    email_verification_code_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     # --- Estado / permisos ---
     # Permite desactivar una cuenta sin borrarla (baneos, verificacion de email
     # futura, etc.). El login exigira que este activa.
@@ -206,3 +228,37 @@ class RefreshToken(Base):
     def __repr__(self) -> str:
         # Nunca mostramos el hash completo; con el id y el usuario basta para depurar.
         return f"<RefreshToken id={self.id} user_id={self.user_id} revoked={self.revoked}>"
+
+
+class EmailVerificationAttempt(Base):
+    """Tabla `email_verification_attempts`: un intento FALLIDO de confirmar un
+    codigo de verificacion de email.
+
+    Solo se registran los intentos fallidos (uno por fila), nunca los que
+    aciertan: es lo que permite contar "maximo 5 intentos fallidos en una
+    ventana movil de 24h" con una consulta directa (`COUNT(*) WHERE user_id =
+    ... AND created_at > ahora - 24h`), sin necesitar un contador aparte que
+    haya que decidir cuando resetear. El limite es POR USUARIO, no por
+    codigo: pedir un codigo nuevo (POST /auth/verify-email/request) no borra
+    estas filas, asi que el contador de intentos "sigue activo" entre
+    codigos, tal y como pide el backlog. Un acierto SI las borra todas (ver
+    service.confirm_email_verification): verificado el email, no tiene
+    sentido seguir arrastrando intentos fallidos previos.
+    """
+
+    __tablename__ = "email_verification_attempts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    # ondelete=CASCADE: si se borra el usuario, sus intentos desaparecen con
+    # el (igual que RefreshToken.user_id).
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    def __repr__(self) -> str:
+        return f"<EmailVerificationAttempt id={self.id} user_id={self.user_id}>"

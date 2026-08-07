@@ -54,7 +54,13 @@ mantenerse estable y bien versionado.
 - **Login/registro con Google (ver sección "Login con Google" más abajo)**: `POST
   /auth/google` recibe el ID token que obtiene el SDK `GoogleSignIn` en el cliente, lo
   verifica contra Google, y emite el MISMO `TokenPair` que `/auth/login` — la app no
-  distingue después si la sesión vino de contraseña o de Google.
+  distingue después si la sesión vino de contraseña o de Google. Bloque de Google/contraseña
+  completo (5.1–5.4): login/alta, vincular/desvincular, poner/quitar contraseña.
+- **Verificación de email (ver sección "Verificación de email" más abajo, tarea 5.5)**: código
+  numérico de 6 dígitos por email (no enlace), `POST /auth/verify-email/request` +
+  `/confirm`, con límite de 5 intentos fallidos en ventana móvil de 24h. `EmailBackend`
+  (`app/core/email.py`) es el mismo patrón puerto/adaptador que `StorageBackend`: solo
+  `ConsoleEmailBackend` (log) por ahora, un proveedor real queda pendiente.
 
 ---
 
@@ -136,12 +142,13 @@ ommadawn-api/
 │   │   ├── exceptions.py       # HTTPExceptions reutilizables
 │   │   ├── openapi.py          # Post-proceso del openapi.json (opcionales aptos para iOS)
 │   │   ├── storage.py          # StorageBackend (Local ahora; GCS pendiente)
+│   │   ├── email.py            # EmailBackend (Console ahora; SMTP/SendGrid pendiente)
 │   │   └── country_codes.py    # Lista ISO 3166-1 alpha-2 + validate_country_code (compartido)
 │   └── modules/
-│       ├── auth/               # ✅ Fases 2-4 (bloque cerrado)
-│       │   ├── models.py       # User, RefreshToken
+│       ├── auth/               # ✅ Fases 2-4 (bloque cerrado) + Google/verificación (5.1-5.5)
+│       │   ├── models.py       # User, RefreshToken, EmailVerificationAttempt
 │       │   ├── schemas.py      # Contratos Pydantic (request/response)
-│       │   ├── service.py      # Lógica: registro, login, tokens, rotación
+│       │   ├── service.py      # Lógica: registro, login, tokens, rotación, Google, email
 │       │   ├── dependencies.py # get_current_user, require_admin (protegen endpoints)
 │       │   └── router.py       # /api/v1/auth/*
 │       ├── discography/        # 🚧 Fase 5 en marcha (Release -> Edition -> Track/Image)
@@ -412,6 +419,71 @@ cualquier otra cuenta.
      `detail` en prosa — este SÍ es el mensaje humano habitual, no un código), aplica el
      cambio y pone `username_is_default=False`.
 - **No hay ventana de tiempo**: el cambio único no caduca; solo se consume al USARSE.
+
+---
+
+## Verificación de email
+
+`POST /auth/verify-email/request` y `POST /auth/verify-email/confirm` (tarea 5.5 del
+backlog): verificación de email por **código numérico de 6 dígitos**, no por enlace — la API
+no sirve ninguna página HTML, todo queda en JSON + la app.
+
+- **`User.email_verified`** (`Boolean`, NOT NULL, default `False`): `False` desde el alta para
+  registro por contraseña; `True` desde el alta para cuentas creadas por `google_login`
+  (reutiliza la comprobación de `email_verified: true` del ID token que ya existía —
+  `google_login` nunca da de alta a nadie sin ella). Migración `8cbfa5b0ea40` — necesitó
+  `server_default='false'` (mismo gotcha de siempre) y un **backfill de datos**: las cuentas
+  que YA tenían `google_id` al aplicar la migración se marcaron `email_verified=true`, porque
+  su email ya estaba verificado por Google desde que se crearon/vincularon — no tendría
+  sentido pedirles reverificar algo ya comprobado.
+- **`User.email_verification_code_hash` / `_expires_at`** (ambos nullable): el código
+  PENDIENTE, asociado directamente al usuario (no una tabla de códigos con histórico). Pedir
+  un código nuevo **sobrescribe** estas dos columnas — así se invalida automáticamente
+  cualquier código anterior, sin necesitar borrar nada aparte. Se guarda el HASH
+  (`security.hash_verification_code`, SHA-256), no el código en claro; a diferencia del hash
+  de un refresh token, aquí el hash NO protege de fuerza bruta offline (6 dígitos son solo un
+  millón de combinaciones, recorrerlas todas es instantáneo) — se hashea igualmente por
+  consistencia con el resto del repo y para que una fuga de la fila no exponga directamente un
+  código aún válido.
+- **`EmailVerificationAttempt`** (tabla nueva, solo intentos FALLIDOS): cada fila es un intento
+  que no coincidió (o había caducado). El límite ("máximo 5 intentos fallidos en una ventana
+  MÓVIL de 24h") se calcula con una consulta directa
+  (`COUNT(*) WHERE user_id = ... AND created_at > ahora - 24h`) en vez de un contador con
+  reseteo manual — así la ventana es de verdad móvil (una fila de hace 25h deja de contar sola,
+  sin tener que decidir cuándo "reiniciar" nada). El límite es **por usuario, no por código**:
+  pedir un código nuevo NO borra estas filas (`request_email_verification` no las toca), tal y
+  como pide el backlog explícitamente. Un ACIERTO sí las borra todas (`DELETE ... WHERE
+  user_id = ...` en `confirm_email_verification`): verificado el email, no tiene sentido seguir
+  arrastrando intentos fallidos previos.
+- **Orden de comprobaciones en `confirm_email_verification`**: el límite de intentos se mira
+  **antes** que el código en sí — un usuario bloqueado por el límite recibe `429` sin que el
+  `service` llegue a comparar hashes, así la respuesta no puede filtrar por temporización si el
+  código que mandó (bloqueado) era correcto o no.
+- **Dos excepciones nuevas, mismo criterio de código corto que `email_conflict`/
+  `username_already_set`**: `too_many_verification_attempts_exception` (`429`,
+  `detail: "too_many_attempts"`) y `invalid_verification_code_exception` (`401`,
+  `detail: "invalid_code"` — un único error genérico para "no coincide", "caducado" o "no
+  había ninguno pendiente": la app no necesita distinguir cuál de los tres fue).
+- **`POST /verify-email/request` es un no-op (204) si `email_verified` ya es `True`**: decisión
+  tomada porque la app no necesita distinguirlo de un 204 normal (no debería llamar a este
+  endpoint en ese estado). El commit del código nuevo ocurre **después** de que
+  `EmailBackend.send` tenga éxito, no antes: si el envío falla, no queda en BD un código
+  "fantasma" que el usuario nunca recibió.
+- **`app/core/email.py` — puerto `EmailBackend`**, mismo patrón que `StorageBackend` en
+  `storage.py`: `ConsoleEmailBackend` (desarrollo, escribe el correo en el log) es la única
+  implementación por ahora; un backend real (SMTP/SendGrid) queda **pendiente de implementar**
+  hasta tener una cuenta/proyecto real contra el que probarlo (mismo criterio que
+  `GCSStorageBackend`: código no verificable no se escribe a ciegas). Se elige por
+  `Settings.email_backend` (`.env`), igual que `storage_backend` elige el backend de ficheros.
+- **`_is_past`** (antes `_is_expired`, en `service.py`): se generalizó para aceptar un
+  `datetime` cualquiera en vez de solo una fila de `RefreshToken`, y así reutilizar la misma
+  normalización UTC (SQLite naive vs. Postgres aware) al comprobar la caducidad del código de
+  verificación.
+- **Tests** (`tests/test_auth.py`): `conftest.py` gana un backend de email de test
+  (`RecordingEmailBackend`, fixture `email_backend`) que no envía nada de verdad, solo guarda
+  el cuerpo del correo — los tests sacan el código de ahí con una regex, igual que la app real
+  lo sacaría del correo recibido. Mismo patrón que `LocalStorageBackend` apuntando a una
+  carpeta temporal en los tests de avatar/imágenes.
 
 ---
 

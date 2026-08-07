@@ -192,6 +192,8 @@ Se manejan **dos tokens con roles distintos**:
 | `DELETE` | `/api/v1/auth/me/google` | 🔒 | Desvincula Google. `409` (`detail: "google_only_access"`) si es la única forma de acceso (sin contraseña) |
 | `POST` | `/api/v1/auth/me/password` | 🔒 | Cambia la contraseña (o la establece por primera vez si la cuenta se creó solo por Google); `204` |
 | `DELETE` | `/api/v1/auth/me/password` | 🔒 | Quita la contraseña (vuelve a depender solo de Google). `409` (`detail: "password_only_access"`) si no hay Google vinculado |
+| `POST` | `/api/v1/auth/verify-email/request` | 🔒 | Envía un código de 6 dígitos al email de la cuenta (`204`, no-op si ya está verificado) |
+| `POST` | `/api/v1/auth/verify-email/confirm` | 🔒 | Confirma el código (`204`); `401` (`detail: "invalid_code"`) o `429` (`detail: "too_many_attempts"`) |
 | `GET` | `/api/v1/auth/users` | 🔒👑 | Lista todos los usuarios |
 | `PATCH` | `/api/v1/auth/users/{id}` | 🔒👑 | Cambia si otro usuario es `admin` |
 
@@ -275,6 +277,28 @@ caracteres) y responde `204`:
 vuelve a depender solo de Google. Rechaza con `409` y
 `{"detail": "password_only_access"}` si no hay Google vinculado (`google_id`
 es `null`) — sin eso, la cuenta se quedaría sin ninguna forma de entrar.
+
+### Verificación de email
+
+Código numérico de 6 dígitos por email, no un enlace: la API no sirve
+ninguna página HTML, todo queda en JSON + la app.
+
+- **`POST /auth/verify-email/request`** genera un código (caduca en 2h) y lo
+  envía al email de la cuenta autenticada, invalidando cualquier código
+  pendiente anterior. `204`; si el email ya estaba verificado, no hace nada
+  (también `204`).
+- **`POST /auth/verify-email/confirm`** recibe `{"code": "123456"}`:
+  - Máximo **5 intentos fallidos en una ventana móvil de 24h**, no por
+    código individual — pedir uno nuevo no reinicia el contador. Al
+    superarlo, `429` con `{"detail": "too_many_attempts"}`, sin llegar a
+    comprobar el código enviado.
+  - Si no coincide o ha caducado, `401` con `{"detail": "invalid_code"}`.
+  - Si acierta, marca el email como verificado, invalida el código y
+    resetea el contador de intentos. `204`.
+
+`UserRead` incluye `email_verified: bool`: `false` por defecto en el
+registro por contraseña, `true` desde el alta en cuentas creadas por Google
+(su email ya lo verificó Google).
 
 ### Flujo: del login al logout
 

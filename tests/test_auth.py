@@ -6,6 +6,7 @@ marcar cada test: pytest-asyncio los detecta por ser `async def`.
 """
 
 import re
+from datetime import datetime, timedelta, timezone
 
 from httpx import AsyncClient
 from sqlalchemy import select
@@ -14,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.exceptions import credentials_exception
 from app.modules.auth import service
-from app.modules.auth.models import User
+from app.modules.auth.models import EmailVerificationAttempt, User
 
 BASE = "/api/v1/auth"
 
@@ -53,6 +54,8 @@ async def test_register_creates_user_without_leaking_password(client: AsyncClien
     assert body["is_admin"] is False
     assert body["has_google"] is False
     assert body["has_password"] is True
+    # Registro por contrasena: el email no esta verificado todavia.
+    assert body["email_verified"] is False
     # Registro por contrasena: el username lo eligio la persona, no es provisional.
     assert body["username_is_default"] is False
     # Lo mas importante: la contrasena (ni su hash) NUNCA sale por la API.
@@ -192,6 +195,8 @@ async def test_google_login_creates_new_user_when_email_unknown(
     assert me.json()["has_google"] is True
     assert me.json()["username_is_default"] is True
     assert me.json()["has_password"] is False  # cuenta creada solo por Google
+    # Google ya verifico el email antes de dar de alta la cuenta.
+    assert me.json()["email_verified"] is True
 
 
 async def test_google_login_existing_linked_user_logs_in_without_duplicating(
@@ -552,6 +557,225 @@ async def test_remove_password_succeeds_when_google_linked(
         json={"username_or_email": CREDS["username"], "password": CREDS["password"]},
     )
     assert login.status_code == 401
+
+
+# --- Verificacion de email ------------------------------------------------------
+
+
+def _extract_code(body: str) -> str:
+    """Saca el codigo de 6 digitos del cuerpo de un email 'enviado' (el doble
+    de test, `RecordingEmailBackend`, solo guarda el texto)."""
+    match = re.search(r"\d{6}", body)
+    assert match, f"no se encontro un codigo de 6 digitos en: {body!r}"
+    return match.group()
+
+
+async def test_request_email_verification_requires_authentication(client: AsyncClient):
+    resp = await client.post(f"{BASE}/verify-email/request")
+    assert resp.status_code == 401
+
+
+async def test_request_email_verification_sends_code(
+    client: AsyncClient, db_session: AsyncSession, email_backend
+):
+    tokens = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    resp = await client.post(f"{BASE}/verify-email/request", headers=headers)
+    assert resp.status_code == 204
+
+    assert len(email_backend.sent) == 1
+    assert email_backend.sent[0]["to"] == CREDS["email"]
+    code = _extract_code(email_backend.sent[0]["body"])
+    assert re.fullmatch(r"\d{6}", code)
+
+    result = await db_session.execute(
+        select(User).where(User.username == CREDS["username"])
+    )
+    user = result.scalar_one()
+    assert user.email_verification_code_hash is not None
+    assert user.email_verification_code_expires_at is not None
+
+
+async def test_request_email_verification_is_noop_when_already_verified(
+    client: AsyncClient, email_backend, monkeypatch
+):
+    # Cuenta creada por Google: email_verified ya es True desde el alta.
+    _mock_google_token(monkeypatch)
+    tokens = (await client.post(f"{BASE}/google", json={"id_token": "fake-token"})).json()
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    resp = await client.post(f"{BASE}/verify-email/request", headers=headers)
+    assert resp.status_code == 204
+    assert email_backend.sent == []  # no se ha enviado nada, no hacia falta
+
+
+async def test_confirm_email_verification_requires_authentication(client: AsyncClient):
+    resp = await client.post(f"{BASE}/verify-email/confirm", json={"code": "123456"})
+    assert resp.status_code == 401
+
+
+async def test_confirm_email_verification_with_correct_code(
+    client: AsyncClient, email_backend
+):
+    tokens = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    await client.post(f"{BASE}/verify-email/request", headers=headers)
+    code = _extract_code(email_backend.sent[-1]["body"])
+
+    resp = await client.post(
+        f"{BASE}/verify-email/confirm", json={"code": code}, headers=headers
+    )
+    assert resp.status_code == 204
+
+    me = await client.get(f"{BASE}/me", headers=headers)
+    assert me.json()["email_verified"] is True
+
+
+async def test_confirm_email_verification_wrong_code_returns_401(
+    client: AsyncClient, email_backend
+):
+    tokens = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    await client.post(f"{BASE}/verify-email/request", headers=headers)
+    real_code = _extract_code(email_backend.sent[-1]["body"])
+    wrong_code = "000000" if real_code != "000000" else "111111"
+
+    resp = await client.post(
+        f"{BASE}/verify-email/confirm", json={"code": wrong_code}, headers=headers
+    )
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "invalid_code"
+
+    me = await client.get(f"{BASE}/me", headers=headers)
+    assert me.json()["email_verified"] is False
+
+
+async def test_confirm_email_verification_rejects_malformed_code(client: AsyncClient):
+    tokens = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    resp = await client.post(
+        f"{BASE}/verify-email/confirm", json={"code": "12a456"}, headers=headers
+    )
+    assert resp.status_code == 422
+
+
+async def test_confirm_email_verification_expired_code_returns_401(
+    client: AsyncClient, db_session: AsyncSession, email_backend
+):
+    tokens = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    await client.post(f"{BASE}/verify-email/request", headers=headers)
+    code = _extract_code(email_backend.sent[-1]["body"])
+
+    # Forzamos la caducidad manipulando directamente la BD (la API no expone
+    # forma de "esperar 2 horas").
+    result = await db_session.execute(
+        select(User).where(User.username == CREDS["username"])
+    )
+    user = result.scalar_one()
+    user.email_verification_code_expires_at = datetime.now(timezone.utc) - timedelta(
+        hours=1
+    )
+    await db_session.commit()
+
+    resp = await client.post(
+        f"{BASE}/verify-email/confirm", json={"code": code}, headers=headers
+    )
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "invalid_code"
+
+
+async def test_confirm_email_verification_blocks_after_five_failed_attempts(
+    client: AsyncClient, email_backend
+):
+    tokens = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    await client.post(f"{BASE}/verify-email/request", headers=headers)
+    real_code = _extract_code(email_backend.sent[-1]["body"])
+    wrong_code = "000000" if real_code != "000000" else "111111"
+
+    for _ in range(5):
+        resp = await client.post(
+            f"{BASE}/verify-email/confirm", json={"code": wrong_code}, headers=headers
+        )
+        assert resp.status_code == 401
+
+    # El 6o intento se bloquea por limite, aunque el codigo sea CORRECTO.
+    resp = await client.post(
+        f"{BASE}/verify-email/confirm", json={"code": real_code}, headers=headers
+    )
+    assert resp.status_code == 429
+    assert resp.json()["detail"] == "too_many_attempts"
+
+    me = await client.get(f"{BASE}/me", headers=headers)
+    assert me.json()["email_verified"] is False
+
+
+async def test_confirm_email_verification_new_code_does_not_reset_attempt_counter(
+    client: AsyncClient, email_backend
+):
+    # "si piden un codigo nuevo, el contador de intentos sigue activo".
+    tokens = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    await client.post(f"{BASE}/verify-email/request", headers=headers)
+    first_code = _extract_code(email_backend.sent[-1]["body"])
+    wrong_code = "000000" if first_code != "000000" else "111111"
+
+    for _ in range(5):
+        await client.post(
+            f"{BASE}/verify-email/confirm", json={"code": wrong_code}, headers=headers
+        )
+
+    # Piden un codigo NUEVO (invalida el anterior)...
+    await client.post(f"{BASE}/verify-email/request", headers=headers)
+    new_code = _extract_code(email_backend.sent[-1]["body"])
+
+    # ...pero el limite sigue activo, incluso con el codigo nuevo y correcto.
+    resp = await client.post(
+        f"{BASE}/verify-email/confirm", json={"code": new_code}, headers=headers
+    )
+    assert resp.status_code == 429
+    assert resp.json()["detail"] == "too_many_attempts"
+
+
+async def test_confirm_email_verification_success_resets_attempt_counter(
+    client: AsyncClient, db_session: AsyncSession, email_backend
+):
+    tokens = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    await client.post(f"{BASE}/verify-email/request", headers=headers)
+    real_code = _extract_code(email_backend.sent[-1]["body"])
+    wrong_code = "000000" if real_code != "000000" else "111111"
+
+    # 3 intentos fallidos (por debajo del limite de 5) y luego el acierto.
+    for _ in range(3):
+        await client.post(
+            f"{BASE}/verify-email/confirm", json={"code": wrong_code}, headers=headers
+        )
+    resp = await client.post(
+        f"{BASE}/verify-email/confirm", json={"code": real_code}, headers=headers
+    )
+    assert resp.status_code == 204
+
+    result = await db_session.execute(
+        select(EmailVerificationAttempt).where(
+            EmailVerificationAttempt.user_id
+            == (
+                await db_session.execute(
+                    select(User.id).where(User.username == CREDS["username"])
+                )
+            ).scalar_one()
+        )
+    )
+    assert result.scalars().all() == []  # el acierto borra los intentos previos
 
 
 # --- /me (endpoint protegido) --------------------------------------------------

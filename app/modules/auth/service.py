@@ -17,10 +17,11 @@ from uuid import uuid4
 
 from fastapi import HTTPException, status
 from google.auth.exceptions import GoogleAuthError
-from sqlalchemy import or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.core.email import EmailBackend
 from app.core.exceptions import (
     credentials_exception,
     email_taken_exception,
@@ -31,21 +32,31 @@ from app.core.exceptions import (
     invalid_current_password_exception,
     invalid_google_token_exception,
     invalid_refresh_token_exception,
+    invalid_verification_code_exception,
     password_only_access_exception,
+    too_many_verification_attempts_exception,
     username_already_set_exception,
     username_taken_exception,
 )
 from app.core.security import (
     create_access_token,
     generate_refresh_token,
+    generate_verification_code,
     hash_password,
     hash_refresh_token,
+    hash_verification_code,
     verify_google_id_token,
     verify_password,
 )
 from app.core.storage import StorageBackend, validate_image_upload
-from app.modules.auth.models import RefreshToken, User
-from app.modules.auth.schemas import PasswordUpdate, TokenPair, UserCreate, UserUpdate
+from app.modules.auth.models import EmailVerificationAttempt, RefreshToken, User
+from app.modules.auth.schemas import (
+    EmailVerificationConfirm,
+    PasswordUpdate,
+    TokenPair,
+    UserCreate,
+    UserUpdate,
+)
 
 settings = get_settings()
 
@@ -61,6 +72,13 @@ user_not_found_exception = HTTPException(
 # calcula con los mismos minutos en core/security.py), y se expone al cliente en
 # `TokenPair.expires_in` para que pueda renovar de forma proactiva.
 ACCESS_TOKEN_EXPIRES_IN = settings.access_token_expire_minutes * 60
+
+# Cuanto vive un codigo de verificacion de email desde que se pide.
+EMAIL_VERIFICATION_CODE_EXPIRES_AFTER = timedelta(hours=2)
+# Ventana MOVIL para contar intentos fallidos (no se reinicia al pedir un
+# codigo nuevo, ver EmailVerificationAttempt) y cuantos se toleran dentro.
+EMAIL_VERIFICATION_ATTEMPTS_WINDOW = timedelta(hours=24)
+EMAIL_VERIFICATION_MAX_ATTEMPTS = 5
 
 
 def _build_refresh_token(session: AsyncSession, user_id: int) -> str:
@@ -129,18 +147,18 @@ async def _get_refresh_token_row(
     return result.scalar_one_or_none()
 
 
-def _is_expired(row: RefreshToken) -> bool:
-    """Indica si una fila de refresh token ha caducado.
+def _is_past(instant: datetime) -> bool:
+    """Indica si un instante (caducidad de un refresh token, de un codigo de
+    verificacion...) ya ha pasado.
 
     Normaliza la fecha a UTC antes de comparar: SQLite (desarrollo) devuelve
     fechas "naive" (sin zona) y PostgreSQL (produccion) las devuelve "aware".
     Como siempre las guardamos en UTC, tratar una naive como UTC es correcto y
     hace que la comparacion funcione igual en ambos motores.
     """
-    expires_at = row.expires_at
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    return expires_at <= datetime.now(timezone.utc)
+    if instant.tzinfo is None:
+        instant = instant.replace(tzinfo=timezone.utc)
+    return instant <= datetime.now(timezone.utc)
 
 
 async def _revoke_all_refresh_tokens(session: AsyncSession, user_id: int) -> int:
@@ -282,7 +300,9 @@ async def google_login(session: AsyncSession, id_token: str) -> TokenPair:
          (`google_email_conflict_exception`).
       3. No existe ni por `google_id` ni por email -> alta nueva, vinculada
          desde el primer momento, con un username aleatorio provisional
-         (`username_is_default=True`, ver `_generate_random_username`).
+         (`username_is_default=True`, ver `_generate_random_username`) y
+         `email_verified=True` (el `if` de mas abajo ya exige que el token
+         traiga `email_verified: true`, verificado por Google).
     """
     try:
         payload = verify_google_id_token(id_token)
@@ -306,6 +326,7 @@ async def google_login(session: AsyncSession, id_token: str) -> TokenPair:
             username=await _generate_random_username(session),
             username_is_default=True,
             email=email,
+            email_verified=True,  # ya lo exige el `if` de arriba (email_verified del token)
             full_name=payload.get("name"),
             avatar_url=payload.get("picture"),
             google_id=google_id,
@@ -336,7 +357,7 @@ async def refresh_tokens(session: AsyncSession, refresh_token: str) -> TokenPair
          una unica transaccion atomica, y devolvemos el par nuevo.
     """
     row = await _get_refresh_token_row(session, refresh_token)
-    if row is None or _is_expired(row):
+    if row is None or _is_past(row.expires_at):
         raise invalid_refresh_token_exception
 
     if row.revoked:
@@ -525,6 +546,101 @@ async def remove_password(session: AsyncSession, user: User) -> None:
         raise password_only_access_exception
 
     user.hashed_password = None
+    await session.commit()
+
+
+# --- Verificacion de email --------------------------------------------------------
+
+
+async def request_email_verification(
+    session: AsyncSession, backend: EmailBackend, user: User
+) -> None:
+    """Genera un codigo de verificacion nuevo y lo envia al email del usuario.
+
+    Si el email ya esta verificado, no hace nada (204 igualmente: no hay
+    ningun estado de error que la app necesite distinguir aqui, ver backlog).
+    Guardar el codigo nuevo SOBRESCRIBE el anterior (mismas dos columnas en
+    `User`), lo que invalida automaticamente cualquier codigo pendiente
+    previo. El commit ocurre DESPUES de enviar el correo con exito: si el
+    envio falla, no queda en BD un codigo "fantasma" que el usuario nunca
+    recibio.
+    """
+    if user.email_verified:
+        return
+
+    code = generate_verification_code()
+    user.email_verification_code_hash = hash_verification_code(code)
+    user.email_verification_code_expires_at = (
+        datetime.now(timezone.utc) + EMAIL_VERIFICATION_CODE_EXPIRES_AFTER
+    )
+
+    await backend.send(
+        to=user.email,
+        subject="Verifica tu email en Ommadawn",
+        body=(
+            f"Tu codigo de verificacion es {code}. "
+            "Caduca en 2 horas. Si no lo has pedido tu, ignora este correo."
+        ),
+    )
+    await session.commit()
+
+
+async def _count_recent_verification_attempts(session: AsyncSession, user_id: int) -> int:
+    """Cuenta los intentos fallidos del usuario en la ventana movil de 24h."""
+    window_start = datetime.now(timezone.utc) - EMAIL_VERIFICATION_ATTEMPTS_WINDOW
+    result = await session.execute(
+        select(func.count())
+        .select_from(EmailVerificationAttempt)
+        .where(
+            EmailVerificationAttempt.user_id == user_id,
+            EmailVerificationAttempt.created_at > window_start,
+        )
+    )
+    return result.scalar_one()
+
+
+async def confirm_email_verification(
+    session: AsyncSession, user: User, data: EmailVerificationConfirm
+) -> None:
+    """Confirma un codigo de verificacion de email.
+
+    Orden de comprobaciones (el limite de intentos va PRIMERO, antes de mirar
+    el codigo en si — asi un atacante bloqueado por el limite no puede seguir
+    usando la respuesta para distinguir codigos validos de invalidos):
+      1. >= 5 intentos fallidos en las ultimas 24h -> 429
+         (`too_many_verification_attempts_exception`), sin comprobar el codigo.
+      2. El codigo no coincide, ha caducado, o no habia ninguno pendiente ->
+         se registra un intento fallido (fila nueva) y 401
+         (`invalid_verification_code_exception`).
+      3. Coincide y no ha caducado -> `email_verified=True`, se borra el
+         codigo pendiente y se borran TODOS los intentos fallidos del usuario
+         (el contador se resetea solo al acertar, no al pedir un codigo
+         nuevo).
+    """
+    if await _count_recent_verification_attempts(session, user.id) >= (
+        EMAIL_VERIFICATION_MAX_ATTEMPTS
+    ):
+        raise too_many_verification_attempts_exception
+
+    is_valid = (
+        user.email_verification_code_hash is not None
+        and user.email_verification_code_expires_at is not None
+        and not _is_past(user.email_verification_code_expires_at)
+        and hash_verification_code(data.code) == user.email_verification_code_hash
+    )
+    if not is_valid:
+        session.add(EmailVerificationAttempt(user_id=user.id))
+        await session.commit()
+        raise invalid_verification_code_exception
+
+    user.email_verified = True
+    user.email_verification_code_hash = None
+    user.email_verification_code_expires_at = None
+    await session.execute(
+        delete(EmailVerificationAttempt).where(
+            EmailVerificationAttempt.user_id == user.id
+        )
+    )
     await session.commit()
 
 

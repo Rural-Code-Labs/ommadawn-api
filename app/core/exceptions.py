@@ -145,3 +145,22 @@ password_only_access_exception = HTTPException(
     status_code=status.HTTP_409_CONFLICT,
     detail="password_only_access",
 )
+
+# 429 -> POST /auth/verify-email/confirm: 5 intentos fallidos ya consumidos en
+# las ultimas 24h (ventana movil: no se resetea al pedir un codigo nuevo, solo
+# al acertar o al ir "envejeciendo" los intentos antiguos fuera de la
+# ventana). Se rechaza SIN comprobar el codigo enviado, para no filtrar por
+# temporizacion si el codigo era correcto o no una vez bloqueado.
+too_many_verification_attempts_exception = HTTPException(
+    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+    detail="too_many_attempts",
+)
+
+# 401 -> POST /auth/verify-email/confirm: el codigo no coincide con el
+# pendiente, o ha caducado (2h), o no habia ninguno pendiente. Un solo error
+# generico para los tres casos (mismo criterio que credentials_exception): no
+# hay motivo para que la app sepa CUAL de los tres fue.
+invalid_verification_code_exception = HTTPException(
+    status_code=status.HTTP_401_UNAUTHORIZED,
+    detail="invalid_code",
+)

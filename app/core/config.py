@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 30
 
+    # --- Envio de correo (verificacion de email) ---
+    # "console" en desarrollo (escribe el correo en el log, ver
+    # app/core/email.py); un proveedor real (SMTP/SendGrid) queda pendiente de
+    # implementar hasta tener una cuenta real contra la que probarlo.
+    email_backend: str = "console"
+
     # --- Login con Google (OAuth) ---
     # El "Web Client ID" del proyecto en Google Cloud Console. La app iOS (y en
     # el futuro Android) configura el SDK con `serverClientID` = este mismo

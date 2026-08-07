@@ -76,6 +76,17 @@ class PasswordUpdate(BaseModel):
     new_password: str = Field(min_length=8, max_length=128)
 
 
+class EmailVerificationConfirm(BaseModel):
+    """Body de POST /auth/verify-email/confirm: el codigo de 6 digitos.
+
+    `pattern` exige exactamente 6 caracteres numericos: un codigo con letras
+    o de otra longitud ya es invalido por forma, sin necesidad de que el
+    `service` (o una consulta a BD) lo compruebe.
+    """
+
+    code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+
+
 class UserUpdate(BaseModel):
     """Datos de perfil editables por el propio usuario (body de PATCH /auth/me).
 
@@ -143,6 +154,7 @@ class UserRead(BaseModel):
     username: str
     username_is_default: bool
     email: str
+    email_verified: bool
     full_name: str | None
     country: str | None
     city: str | None

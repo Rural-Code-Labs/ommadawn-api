@@ -16,7 +16,9 @@ Piezas:
 
 `client` tambien redirige el backend de almacenamiento (imagenes) a una carpeta
 TEMPORAL de pytest, para que subir imagenes en los tests no escriba en la
-carpeta real de desarrollo (`./media`).
+carpeta real de desarrollo (`./media`), y el backend de email a un doble en
+memoria (`RecordingEmailBackend`) que no envia nada de verdad: los tests que
+necesiten el codigo de verificacion lo leen de ahi (ver fixture `email_backend`).
 """
 
 from collections.abc import AsyncGenerator
@@ -33,8 +35,31 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base, get_session
+from app.core.email import EmailBackend, get_email_backend
 from app.core.storage import LocalStorageBackend, get_storage_backend
 from app.main import app
+
+
+class RecordingEmailBackend(EmailBackend):
+    """Doble de test: no envia nada, solo guarda lo que se le pide enviar.
+
+    Los tests que necesitan el codigo de verificacion (no expuesto por la
+    API, solo por email) lo sacan de aqui: `email_backend.sent[-1]["body"]`.
+    """
+
+    def __init__(self) -> None:
+        self.sent: list[dict] = []
+
+    async def send(self, *, to: str, subject: str, body: str) -> None:
+        self.sent.append({"to": to, "subject": subject, "body": body})
+
+
+@pytest_asyncio.fixture
+async def email_backend() -> RecordingEmailBackend:
+    """Backend de email de test, compartido con `client` (mismo objeto: un
+    test que pide ambas fixtures ve en `email_backend.sent` lo que la API
+    'envio' durante esa peticion)."""
+    return RecordingEmailBackend()
 
 
 @pytest_asyncio.fixture
@@ -57,10 +82,11 @@ async def db_engine() -> AsyncGenerator[AsyncEngine, None]:
 
 @pytest_asyncio.fixture
 async def client(
-    db_engine: AsyncEngine, tmp_path: Path
+    db_engine: AsyncEngine, tmp_path: Path, email_backend: RecordingEmailBackend
 ) -> AsyncGenerator[AsyncClient, None]:
-    """Cliente HTTP contra la app, usando la BD en memoria y un almacenamiento
-    de imagenes temporal (ambos aislados de los datos reales de desarrollo)."""
+    """Cliente HTTP contra la app, usando la BD en memoria, un almacenamiento
+    de imagenes temporal y un backend de email en memoria (todos aislados de
+    los datos/envios reales de desarrollo)."""
     session_maker = async_sessionmaker(
         bind=db_engine, class_=AsyncSession, expire_on_commit=False
     )
@@ -74,6 +100,7 @@ async def client(
     app.dependency_overrides[get_storage_backend] = lambda: LocalStorageBackend(
         media_root=str(tmp_path), media_base_url="http://testserver/media"
     )
+    app.dependency_overrides[get_email_backend] = lambda: email_backend
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:

@@ -13,12 +13,14 @@ from fastapi import APIRouter, Depends, File, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
+from app.core.email import EmailBackend, get_email_backend
 from app.core.exceptions import ErrorMessage
 from app.core.storage import StorageBackend, get_storage_backend
 from app.modules.auth import service
 from app.modules.auth.dependencies import get_current_user, require_superadmin
 from app.modules.auth.models import User
 from app.modules.auth.schemas import (
+    EmailVerificationConfirm,
     GoogleLoginRequest,
     LoginRequest,
     PasswordUpdate,
@@ -116,6 +118,21 @@ _PASSWORD_ONLY_ACCESS = {
         "La cuenta no tiene Google vinculado: la contrasena es su UNICA forma "
         'de entrar, no se puede quitar. `detail` es el codigo '
         '"password_only_access" (no una frase).'
+    ),
+}
+_TOO_MANY_VERIFICATION_ATTEMPTS = {
+    "model": ErrorMessage,
+    "description": (
+        "5 intentos fallidos ya consumidos en las ultimas 24h (ventana movil, "
+        "no se resetea al pedir un codigo nuevo). `detail` es el codigo "
+        '"too_many_attempts". El codigo enviado NO se comprueba en este caso.'
+    ),
+}
+_INVALID_VERIFICATION_CODE = {
+    "model": ErrorMessage,
+    "description": (
+        "Falta el access token o no es valido, O el codigo no coincide/ha "
+        'caducado. `detail` es el codigo "invalid_code" en el segundo caso.'
     ),
 }
 
@@ -367,6 +384,43 @@ async def remove_password(
     """Quita la contrasena del usuario autenticado. Rechaza si la cuenta no
     tiene Google vinculado (quedaria sin ninguna forma de acceder)."""
     await service.remove_password(session, current_user)
+
+
+@router.post(
+    "/verify-email/request",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Pedir un codigo de verificacion de email",
+    responses={status.HTTP_401_UNAUTHORIZED: _NO_AUTH},
+)
+async def request_email_verification(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    backend: EmailBackend = Depends(get_email_backend),
+) -> None:
+    """Genera un codigo de 6 digitos (caduca en 2h) y lo envia al email del
+    usuario autenticado, invalidando cualquier codigo pendiente anterior. Si
+    el email ya estaba verificado, no hace nada (204 igualmente)."""
+    await service.request_email_verification(session, backend, current_user)
+
+
+@router.post(
+    "/verify-email/confirm",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Confirmar el codigo de verificacion de email",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: _INVALID_VERIFICATION_CODE,
+        status.HTTP_429_TOO_MANY_REQUESTS: _TOO_MANY_VERIFICATION_ATTEMPTS,
+    },
+)
+async def confirm_email_verification(
+    data: EmailVerificationConfirm,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Confirma el codigo enviado por email. Maximo 5 intentos fallidos en
+    una ventana movil de 24h (compartida entre codigos, no se resetea al
+    pedir uno nuevo); si se supera, `429` sin llegar a comprobar el codigo."""
+    await service.confirm_email_verification(session, current_user, data)
 
 
 # --- Administracion de usuarios (requiere SUPERadministrador) ---------------------

@@ -128,6 +128,29 @@ def hash_refresh_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+# --- Codigo de verificacion de email --------------------------------------------
+
+
+def generate_verification_code() -> str:
+    """Genera un codigo de verificacion de email: 6 digitos, con ceros a la
+    izquierda si hace falta (siempre 6 caracteres, p. ej. "004213")."""
+    return f"{secrets.randbelow(1_000_000):06d}"
+
+
+def hash_verification_code(code: str) -> str:
+    """Devuelve el hash SHA-256 (hex) de un codigo de verificacion, para
+    guardarlo en BD en vez del codigo en claro.
+
+    A diferencia del refresh token, un codigo de 6 digitos tiene poca entropia
+    (solo un millon de valores): el hash NO protege de fuerza bruta offline
+    (recorrer el millon de hashes es instantaneo). Se hashea igualmente por
+    consistencia con el resto del repo (nunca guardar un secreto en claro si
+    se puede evitar) y porque, sin el hash, una fuga de la fila expondria
+    directamente un codigo aun valido durante su ventana de 2h.
+    """
+    return hashlib.sha256(code.encode()).hexdigest()
+
+
 # --- Login con Google (verificacion de ID token) --------------------------------
 
 
