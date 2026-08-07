@@ -501,5 +501,8 @@ antes de empezar la siguiente.
 | **3 — Flujo de tokens** | Hashing argon2, JWT access token y refresh token con rotación. | ✅ Hecha |
 | **4 — Endpoints de auth** | `register`, `login`, `refresh`, `logout`, `me` + tests de integración. Cierra el bloque de auth. | ✅ Hecha |
 | **5 — Discografía** | Álbumes de estudio, recopilatorios, singles, bootlegs, directos… y sus temas/pistas. | 🚧 En marcha (discos ya funcionando) |
-| **6 — Conciertos** | Giras, fechas, salas, setlists. | Pendiente |
-| **7 — Libros** | Bibliografía relacionada. | Pendiente |
+| **6 — Colecciones de ediciones** | Agrupar ediciones de obras distintas bajo un nombre común (p. ej. "Remasterizaciones HDCD"). | ✅ Hecha |
+| **7 — Contribuciones de usuarios normales** | Proponer cambios al catálogo; un admin aprueba o rechaza. | Pendiente |
+| **8 — Colección personal** | Cada usuario marca qué ediciones tiene, con estado del disco y la funda (escala Discogs: Mint / NM / VG+ / VG / G / F / P). | Pendiente |
+| **9 — Conciertos** | Giras, fechas, salas, setlists. | Pendiente |
+| **10 — Libros** | Bibliografía relacionada. | Pendiente |

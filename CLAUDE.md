@@ -162,7 +162,7 @@ ommadawn-api/
 │       │   ├── schemas.py      # Release/Edition/Track/Image: Create, Read, Update
 │       │   ├── service.py      # CRUD anidado + demotes (primary, portada) + subida
 │       │   └── router.py       # /api/v1/discography/* (leer: público; escribir: admin)
-│       └── concerts/           # Fase 7 (futuro)
+│       └── concerts/           # Fase 9 (futuro)
 ├── migrations/                 # Alembic: env.py (async) + versions/
 ├── tests/                      # Tests de integración por módulo (conftest.py, test_auth.py)
 ├── docker-compose.yml          # PostgreSQL local para desarrollo
@@ -834,8 +834,10 @@ solo sirve de referencia de estilo) y se reparte en varias fases:
 | **Fase 4 — Endpoints de auth** | `register`, `login`, `refresh`, `logout`, `me` + tests de integración. Cierra el bloque de auth. | ✅ Hecha |
 | **Fase 5 — Discografía** | Discos (álbumes de estudio), recopilatorios, singles, bootlegs, directos… y sus temas/pistas. | 🚧 En marcha (modelo + endpoints de discos listos; falta poblar y añadir "directo") |
 | **Fase 6 — Colecciones de ediciones** | Agrupar ediciones de obras distintas bajo un nombre común (p. ej. "Remasterizaciones HDCD"), navegable desde `/discography/collections`. | ✅ Hecha |
-| **Fase 7 — Conciertos** | Giras, fechas, salas, setlists. | Pendiente |
-| **Fase 8 — Libros** | Bibliografía relacionada. | Pendiente |
+| **Fase 7 — Contribuciones de usuarios normales** | Un usuario no-admin propone cambios al catálogo; un admin los aprueba o rechaza. | Pendiente |
+| **Fase 8 — Colección personal** | Cada usuario marca qué ediciones tiene, con el estado del disco y de la funda (escala Discogs: Mint / NM / VG+ / VG / G / F / P). | Pendiente |
+| **Fase 9 — Conciertos** | Giras, fechas, salas, setlists. | Pendiente |
+| **Fase 10 — Libros** | Bibliografía relacionada. | Pendiente |
 | **Fases siguientes** | Otras secciones a acordar con el usuario. | Pendiente |
 
 ---
