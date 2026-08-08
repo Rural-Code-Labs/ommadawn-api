@@ -27,6 +27,7 @@ from app.core.database import Base
 # vacias. Al anadir un modulo nuevo (conciertos, libros...), importalo aqui.
 from app.modules.auth import models as _auth_models  # noqa: F401
 from app.modules.discography import models as _discography_models  # noqa: F401
+from app.modules.forum import models as _forum_models  # noqa: F401
 
 # Objeto de configuracion de Alembic (acceso a los valores de alembic.ini).
 config = context.config

@@ -180,3 +180,15 @@ invalid_password_reset_exception = HTTPException(
     status_code=status.HTTP_401_UNAUTHORIZED,
     detail="invalid_code",
 )
+
+# 403 -> el usuario esta autenticado pero no tiene el email verificado. Lo usa
+# `require_verified_email` (auth/dependencies.py) para los modulos donde
+# PARTICIPAR (crear contenido, comentar...) exige haber demostrado ser dueno
+# del email, no solo tener una cuenta activa -- primer consumidor: el foro. El
+# `detail` es un CODIGO corto (mismo criterio que `google_email_conflict_exception`
+# y demas): la app necesita mostrar "verifica tu email para participar" en vez
+# de un 403 opaco, sin tener que parsear un texto humano.
+email_not_verified_exception = HTTPException(
+    status_code=status.HTTP_403_FORBIDDEN,
+    detail="email_not_verified",
+)

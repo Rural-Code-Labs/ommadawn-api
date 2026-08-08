@@ -39,8 +39,12 @@ mantenerse estable y bien versionado.
   "Discografía" más abajo). Quedan recopilatorios/singles/bootlegs por poblar con datos
   reales y, más adelante, "directos" como tipo nuevo. **Fase 6 (Colecciones de ediciones)
   cerrada** ✅: `Collection` agrupa ediciones de obras distintas bajo un nombre común
-  (ver sección "Colecciones de ediciones" más abajo). **Las fases se gestionan desde el
-  repo de la app** (`ommadawn-ios`); aquí solo se aplica lo que se pida en cada una.
+  (ver sección "Colecciones de ediciones" más abajo). **Fase 7 (Foro) cerrada** ✅:
+  `/api/v1/forum/threads`, primer módulo (`app/modules/forum/`) que cruza de verdad la
+  frontera entre módulos — ver sección "Foro" más abajo, especialmente cómo se resuelve
+  sin romper la regla de "no acceder a las tablas de otro módulo directamente". **Las
+  fases se gestionan desde el repo de la app** (`ommadawn-ios`); aquí solo se aplica lo
+  que se pida en cada una.
 - **Base de datos en desarrollo = PostgreSQL local en Docker** (`docker compose up -d`),
   el mismo motor que en producción. SQLite queda como alternativa rápida (línea comentada
   en `.env` / `.env.example`).
@@ -163,6 +167,11 @@ ommadawn-api/
 │       │   ├── schemas.py      # Release/Edition/Track/Image: Create, Read, Update
 │       │   ├── service.py      # CRUD anidado + demotes (primary, portada) + subida
 │       │   └── router.py       # /api/v1/discography/* (leer: público; escribir: admin)
+│       ├── forum/               # ✅ Fase 7 (bloque cerrado): ForumThread -> ForumComment
+│       │   ├── models.py       # ForumThread (entity_type/entity_id abiertos), ForumComment
+│       │   ├── schemas.py      # ThreadCreate/CommentCreate/ThreadStatusUpdate, *Read
+│       │   ├── service.py      # Sin ORM cruzado: usa auth.service/discography.service
+│       │   └── router.py       # /api/v1/forum/* (leer: público; participar: email verificado)
 │       └── concerts/           # Fase 9 (futuro)
 ├── migrations/                 # Alembic: env.py (async) + versions/
 ├── tests/                      # Tests de integración por módulo (conftest.py, test_auth.py)
@@ -807,6 +816,82 @@ país/sello/fecha/formato propios.
   attribute_names=[...])` de `create_edition`/`update_edition` — sin ninguno de los dos,
   acceder a `edition.collections` tras crear/editar habría disparado un lazy-load asíncrono
   no soportado. Sin migración: reutiliza la relación `Edition.collections` que ya existía.
+
+---
+
+## Foro (Fase 7)
+
+`app/modules/forum/` (`/api/v1/forum/threads`, migración `b8d9caca4cde`): foro de discusión
+atado al catálogo. La gente propone/discute cambios y mejoras (`ForumThread` → `ForumComment`);
+un **administrador** decide qué se aplica, A MANO, con las herramientas de edición que ya
+existen en discografía. Esta fase **no** aplica ningún cambio automáticamente — solo organiza
+la conversación.
+
+- **Primer módulo que cruza de verdad la frontera entre módulos** (hasta ahora solo auth↔auth
+  y discografía↔discografía). La regla ya documentada arriba ("los módulos NO acceden a las
+  tablas/models de otro módulo directamente, se comunican por su capa de `service`") se aplica
+  aquí en los dos sentidos:
+  - **`ForumThread.author_id`/`ForumComment.author_id`** son FK "sueltas" a `users.id` (con
+    `ondelete=CASCADE`, integridad referencial real a nivel de BD), pero **sin
+    `relationship()` de SQLAlchemy hacia `User`** — `forum/models.py` NO importa
+    `app.modules.auth.models`. Para mostrar el username del autor,
+    `forum/service.py` llama a **`auth.service.get_users_by_ids(session, ids) -> dict[int,
+    User]`** (función nueva en `auth/service.py`, pensada para que cualquier módulo futuro
+    la reutilice) y construye los DTOs (`ThreadListRead`/`ThreadDetailRead`/`CommentRead`)
+    a mano — mismo patrón que `_build_recording_read`/`_build_collection_detail_read` en
+    discografía, solo que aquí el dato ajeno viene de OTRO módulo, no de una relación ORM
+    propia.
+  - **`ForumThread.entity_id`** apunta a `releases.id` O `editions.id` según `entity_type`
+    (una FK no puede "elegir tabla"), así que tampoco lleva FK real. Validar que el
+    `entity_id` recibido exista de verdad usa **`discography.service.release_exists`/
+    `edition_exists`** (dos funciones nuevas, ligeras a propósito — un `session.get(...) is
+    not None`, sin la carga en cadena de `get_release`, que sería overkill para una simple
+    comprobación de existencia). `forum/service.py` NO importa `Release`/`Edition`.
+  - El **router SÍ** importa `User` (de `app.modules.auth.models`) para el *type hint* de
+    `Depends(...)` — eso es aceptable y ya es el patrón habitual en discografía
+    (`_admin: User = Depends(require_admin)`): identificar quién llama es una cuestión
+    transversal de autenticación, no acceso al modelo de datos de otro módulo. Lo que NO se
+    hace es pasar el objeto `User` completo al `service`: los endpoints de foro extraen
+    `current_user.id` en el router y pasan un `int` suelto (`author_id`) — así
+    `forum/service.py` no necesita el tipo `User` en absoluto.
+- **`ForumEntityType`** (`"release"` / `"edition"` / `"discography"`) es un enum ABIERTO,
+  mismo patrón que `ReleaseType`/`ImageType`/`EditionFormat` (texto + `CHECK`, no un tipo
+  nativo de Postgres): se espera que crezca (conciertos, libros...) sin tocar el tipo de la
+  columna. **Nullable desde ya** aunque la app todavía no cree hilos con `entity_type=None`:
+  es el hueco reservado para "posts sin tema" — decisión explícita del backlog para no tener
+  que volver a tocar el esquema cuando llegue.
+- **`ThreadCreate` valida en el schema (no en el service) que `entity_id` sea coherente con
+  `entity_type`**: obligatorio si es `"release"`/`"edition"`, prohibido en cualquier otro
+  caso (incluido `entity_type=None`). Un `model_validator` explícito, mismo patrón que
+  `TrackCreate._check_recording_source` en discografía.
+- **`require_verified_email`** (nueva dependencia en `auth/dependencies.py`, junto a
+  `require_admin`/`require_superadmin`): exige `current_user.email_verified`. Vive en
+  `auth/dependencies.py` — no en `forum/` — a propósito, mismo criterio que las otras dos
+  dependencias de permisos: cualquier módulo futuro que quiera "hace falta email verificado
+  para participar" la reutiliza sin duplicar lógica. `email_not_verified_exception` (`403`,
+  `detail: "email_not_verified"`) sigue el mismo criterio de código corto que
+  `google_email_conflict_exception`/`username_already_set_exception`.
+- **Cambiar `status` exige SOLO ser admin**, no también email verificado — decisión explícita
+  del backlog (`PATCH /threads/{id}` usa únicamente `require_admin`, no apila
+  `require_verified_email`).
+- **Gotcha real encontrado escribiendo los tests**: `session.refresh(thread,
+  attribute_names=["comments"])` tras un `commit()` que toca `status` (con `onupdate=func.now()`
+  en `updated_at`) provoca `MissingGreenlet` al acceder después a `thread.updated_at` — la
+  columna queda "expirada" por el `onupdate` de servidor y ese `attribute_names` parcial no la
+  recarga; el lazy-load implícito no está soportado en async. Se comprobó con Postgres (dev)
+  que el fallo era real, no solo un artefacto de SQLite. **Arreglado con el mismo patrón que
+  `update_collection`**: tras el `commit`, en vez de un `refresh` parcial, se hace un SELECT
+  fresco completo (`create_thread`/`update_thread_status` llaman a `get_thread(session,
+  thread.id)` al final).
+- **`list_threads` ordena por `created_at DESC, id DESC`** (no solo `created_at`): dos hilos
+  creados casi a la vez pueden compartir el mismo timestamp (la resolución de SQLite es menor
+  que la de Postgres), y sin el `id` como desempate el orden "más recientes primero" no sería
+  determinista.
+- **`POST .../comments` devuelve solo el `CommentRead` nuevo**, no el hilo completo — mismo
+  criterio que `upload_image` en discografía (añadir una imagen no reconstruye toda la
+  edición), evita rehacer el lookup de usernames de TODOS los comentarios por uno nuevo.
+- **Nada de editar/borrar hilos o comentarios propios en esta fase** — fuera de alcance a
+  propósito, según el backlog.
 
 ---
 

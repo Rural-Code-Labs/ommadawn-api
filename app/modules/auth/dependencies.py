@@ -19,6 +19,7 @@ from app.core.database import get_session
 from app.core.exceptions import (
     admin_required_exception,
     credentials_exception,
+    email_not_verified_exception,
     superadmin_required_exception,
 )
 from app.core.security import decode_access_token
@@ -88,4 +89,19 @@ async def require_superadmin(current_user: User = Depends(get_current_user)) -> 
     """
     if not current_user.is_super_admin:
         raise superadmin_required_exception
+    return current_user
+
+
+async def require_verified_email(current_user: User = Depends(get_current_user)) -> User:
+    """Exige que el usuario autenticado tenga el email verificado.
+
+    Se apoya en `get_current_user` (exige tambien un access token valido).
+    Pensada para modulos donde PARTICIPAR (crear contenido, comentar...)
+    exige haber demostrado ser dueno del email, no solo tener una cuenta
+    activa. Primer consumidor: el foro (crear hilos/comentarios). Vive aqui,
+    junto a `require_admin`/`require_superadmin`, para que cualquier modulo
+    futuro la reutilice sin duplicar logica.
+    """
+    if not current_user.email_verified:
+        raise email_not_verified_exception
     return current_user

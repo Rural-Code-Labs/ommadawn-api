@@ -111,6 +111,28 @@ async def get_release(session: AsyncSession, release_id: int) -> Release:
     return release
 
 
+# --- Consulta para OTROS modulos (via esta capa de service, nunca los modelos) ---
+
+
+async def release_exists(session: AsyncSession, release_id: int) -> bool:
+    """Comprueba si existe una obra con ese id, sin cargar sus ediciones.
+
+    Pensada para que OTROS modulos (p. ej. el foro, al validar a que
+    `entity_id` se refiere un hilo) puedan comprobar la existencia sin
+    importar `Release` ni consultar `releases` directamente -- mismo criterio
+    de fronteras entre modulos que `auth.service.get_users_by_ids`. Mas
+    liviana que `get_release`: no necesita la carga en cadena de ediciones
+    para una simple comprobacion de existencia.
+    """
+    return await session.get(Release, release_id) is not None
+
+
+async def edition_exists(session: AsyncSession, edition_id: int) -> bool:
+    """Comprueba si existe una edicion con ese id (de cualquier obra), sin
+    cargar sus temas/imagenes. Mismo motivo que `release_exists`."""
+    return await session.get(Edition, edition_id) is not None
+
+
 async def create_release(session: AsyncSession, data: ReleaseCreate) -> Release:
     """Crea una obra (sin ediciones todavia; se anaden con create_edition)."""
     release = Release(title=data.title, release_type=data.release_type, description=data.description)

@@ -796,3 +796,23 @@ async def set_admin_status(session: AsyncSession, user_id: int, is_admin: bool) 
     await session.commit()
     await session.refresh(user)
     return user
+
+
+# --- Consulta para OTROS modulos (via su capa de service, nunca su modelo) -------
+
+
+async def get_users_by_ids(session: AsyncSession, user_ids: set[int]) -> dict[int, User]:
+    """Devuelve un `{id: User}` para un conjunto de ids.
+
+    Pensada para que OTROS modulos (p. ej. el foro, que guarda `author_id`
+    como un entero suelto en sus propias tablas, sin relacion ORM ni FK a
+    `users`) puedan enriquecer sus propios DTOs con datos basicos de autor
+    (username...) sin importar `app.modules.auth.models.User` ni consultar la
+    tabla `users` directamente — mismo criterio de fronteras entre modulos que
+    el resto del proyecto ("los modulos NO acceden a las tablas de otro modulo
+    directamente, se comunican via su capa de `service`").
+    """
+    if not user_ids:
+        return {}
+    result = await session.execute(select(User).where(User.id.in_(user_ids)))
+    return {user.id: user for user in result.scalars().all()}

@@ -19,6 +19,7 @@ from app.core.config import get_settings
 from app.core.openapi import use_ios_friendly_openapi
 from app.modules.auth.router import router as auth_router
 from app.modules.discography.router import router as discography_router
+from app.modules.forum.router import router as forum_router
 
 # Sin esto, un `logger.info(...)` como el de ConsoleEmailBackend (ver
 # app/core/email.py) no aparece en ningun sitio: el logger raiz de Python, sin
@@ -63,6 +64,13 @@ TAGS_METADATA = [
         "description": (
             "Catalogo de publicaciones (discos de estudio, recopilatorios, "
             "singles, bootlegs) y sus temas."
+        ),
+    },
+    {
+        "name": "forum",
+        "description": (
+            "Foro de discusion atado al catalogo: proponer y discutir cambios "
+            "y mejoras. Un administrador decide que se aplica, manualmente."
         ),
     },
     {
@@ -111,6 +119,7 @@ async def health() -> dict[str, str]:
 # /api/v1/discography/...
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(discography_router, prefix="/api/v1")
+app.include_router(forum_router, prefix="/api/v1")
 
 # --- Ficheros subidos (imagenes) ---
 # Fuera de /api/v1 a proposito: no es un recurso JSON versionado, es servir

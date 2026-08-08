@@ -462,6 +462,51 @@ arriba/abajo usando el endpoint de posición.
 
 ---
 
+## Foro
+
+Foro de discusión atado al catálogo: la gente propone y discute cambios y mejoras, y un
+**administrador** decide qué se aplica — a mano, con las herramientas de edición que ya
+existen. Esta fase **no** aplica ningún cambio automáticamente al catálogo, solo organiza
+la conversación.
+
+```
+ForumThread   (el hilo: título, mensaje inicial, a qué se refiere, estado)
+  └── ForumComment  (respuestas al hilo, en orden cronológico)
+```
+
+### Endpoints
+
+| Método | Ruta | Protegido | Descripción |
+|---|---|---|---|
+| `GET` | `/api/v1/forum/threads` | — | Lista hilos (más recientes primero) con `comment_count`; filtrable por `?entity_type=&entity_id=` y por `?status=` |
+| `GET` | `/api/v1/forum/threads/{id}` | — | Detalle de un hilo con todos sus comentarios |
+| `POST` | `/api/v1/forum/threads` | 🔒✉️ | Crea un hilo |
+| `POST` | `/api/v1/forum/threads/{id}/comments` | 🔒✉️ | Añade un comentario |
+| `PATCH` | `/api/v1/forum/threads/{id}` | 🔒👑 | Cambia `status` (+ `resolution_note` opcional) |
+
+🔒✉️ = requiere `Authorization: Bearer <access token>` **y** email verificado
+(`email_verified=true`, ver la sección "Verificación de email" más arriba) — no basta con
+tener una cuenta activa. Si no está verificado, `403` con `{"detail": "email_not_verified"}`,
+para que la app pueda mostrar "verifica tu email para participar" en vez de un error opaco.
+🔒👑 = requiere **administrador**.
+
+### A qué se refiere un hilo
+
+`entity_type` es un enum abierto (como `release_type` en discografía): `"release"`,
+`"edition"` o `"discography"` (tema general, sin disco concreto) por ahora, pensado para
+crecer sin tocar el esquema. `entity_id` acompaña a `"release"`/`"edition"` (el disco/edición
+concreto, validado contra el catálogo real: `422` si no existe) y no se admite con
+`"discography"` ni cuando no hay `entity_type` en absoluto (tema sin tema, hueco reservado
+para más adelante).
+
+`POST /forum/threads/{id}/comments` devuelve solo el comentario nuevo, no el hilo completo.
+`PATCH /forum/threads/{id}` exige `status`; `resolution_note` es un PATCH real (se omite ⇒ no
+se toca; se envía `null` ⇒ se borra).
+
+No hay (todavía, a propósito) forma de editar o borrar hilos/comentarios propios.
+
+---
+
 ## Entorno de preproducción
 
 La preproducción corre en una **Raspberry Pi** (Ubuntu 24.04) expuesta en internet:
