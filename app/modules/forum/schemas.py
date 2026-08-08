@@ -18,14 +18,20 @@ from app.modules.forum.models import ForumEntityType, ThreadStatus
 class ThreadCreate(BaseModel):
     """Datos para crear un hilo (body de POST /forum/threads).
 
-    `entity_type`/`entity_id` son EXCLUYENTES segun el tipo: "release" y
-    "edition" exigen `entity_id` (a que disco/edicion se refiere el hilo);
-    "discography" (tema general) y la ausencia de `entity_type` (tema sin
-    tema, ver ForumThread.entity_type) NO admiten `entity_id`.
+    `subforum_id` es OBLIGATORIO: todo hilo vive dentro de un subforo (ver
+    GET /forum/subforums para listarlos; hoy solo existe "Discusiones").
+
+    `entity_type`/`entity_id` son EXCLUYENTES segun el tipo, y siguen siendo
+    opcionales (independientes de `subforum_id`: un hilo tiene subforo -donde
+    vive- y, opcionalmente, a que entidad del catalogo se refiere DENTRO de
+    ese subforo): "release" y "edition" exigen `entity_id`; "discography"
+    (tema general) y la ausencia de `entity_type` (tema sin tema, ver
+    ForumThread.entity_type) NO admiten `entity_id`.
     """
 
     title: str = Field(min_length=1, max_length=200)
     body: str = Field(min_length=1)
+    subforum_id: int
     entity_type: ForumEntityType | None = None
     entity_id: int | None = None
 
@@ -66,6 +72,18 @@ class ThreadStatusUpdate(BaseModel):
 # --- Salida (response) ---------------------------------------------------------
 
 
+class SubforumRead(BaseModel):
+    """Vista publica de un subforo (GET /forum/subforums)."""
+
+    id: int
+    name: str
+    description: str | None
+    icon: str | None
+    position: int
+
+    model_config = {"from_attributes": True}
+
+
 class CommentRead(BaseModel):
     """Vista publica de un comentario, con el username de su autor."""
 
@@ -85,6 +103,8 @@ class ThreadListRead(BaseModel):
     title: str
     author_id: int
     author_username: str
+    subforum_id: int
+    subforum_name: str
     entity_type: ForumEntityType | None
     entity_id: int | None
     status: ThreadStatus
@@ -102,6 +122,8 @@ class ThreadDetailRead(BaseModel):
     body: str
     author_id: int
     author_username: str
+    subforum_id: int
+    subforum_name: str
     entity_type: ForumEntityType | None
     entity_id: int | None
     status: ThreadStatus

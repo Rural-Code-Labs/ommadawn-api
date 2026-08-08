@@ -470,17 +470,19 @@ existen. Esta fase **no** aplica ningún cambio automáticamente al catálogo, s
 la conversación.
 
 ```
-ForumThread   (el hilo: título, mensaje inicial, a qué se refiere, estado)
-  └── ForumComment  (respuestas al hilo, en orden cronológico)
+Subforum      (sección del foro: "Discusiones", futuro "Anuncios"...)
+  └── ForumThread   (el hilo: título, mensaje inicial, a qué se refiere, estado)
+        └── ForumComment  (respuestas al hilo, en orden cronológico)
 ```
 
 ### Endpoints
 
 | Método | Ruta | Protegido | Descripción |
 |---|---|---|---|
-| `GET` | `/api/v1/forum/threads` | — | Lista hilos (más recientes primero) con `comment_count`; filtrable por `?entity_type=&entity_id=` y por `?status=` |
+| `GET` | `/api/v1/forum/subforums` | — | Lista subforos (`id`, `name`, `description`, `icon`, `position`), ordenados por `position` |
+| `GET` | `/api/v1/forum/threads` | — | Lista hilos (más recientes primero) con `comment_count`; filtrable por `?subforum_id=`, `?entity_type=&entity_id=` y por `?status=` |
 | `GET` | `/api/v1/forum/threads/{id}` | — | Detalle de un hilo con todos sus comentarios |
-| `POST` | `/api/v1/forum/threads` | 🔒✉️ | Crea un hilo |
+| `POST` | `/api/v1/forum/threads` | 🔒✉️ | Crea un hilo (`subforum_id` obligatorio) |
 | `POST` | `/api/v1/forum/threads/{id}/comments` | 🔒✉️ | Añade un comentario |
 | `PATCH` | `/api/v1/forum/threads/{id}` | 🔒👑 | Cambia `status` (+ `resolution_note` opcional) |
 
@@ -490,6 +492,17 @@ tener una cuenta activa. Si no está verificado, `403` con `{"detail": "email_no
 para que la app pueda mostrar "verifica tu email para participar" en vez de un error opaco.
 🔒👑 = requiere **administrador**.
 
+### Subforos
+
+Todo hilo vive dentro de un **subforo** (`subforum_id`, obligatorio en `ThreadCreate`) —
+pensado para poder añadir más en el futuro (p. ej. "Anuncios", "Ayuda") sin volver a tocar
+el esquema. Hoy solo existe uno, **"Discusiones"** (sembrado por migración, `icon:
+"bubble.left.and.bubble.right"`, un nombre de [SF Symbol](https://developer.apple.com/sf-symbols/)
+— texto libre, la API no valida que sea un símbolo real), que agrupa todos los hilos que ya
+existían. No hay CRUD de subforos desde la API todavía; se añadirá cuando haga falta un
+segundo. `ThreadListRead`/`ThreadDetailRead` incluyen `subforum_id` y `subforum_name`
+(denormalizado, mismo criterio que `release_title` en `CollectionEditionRead`).
+
 ### A qué se refiere un hilo
 
 `entity_type` es un enum abierto (como `release_type` en discografía): `"release"`,
@@ -497,7 +510,8 @@ para que la app pueda mostrar "verifica tu email para participar" en vez de un e
 crecer sin tocar el esquema. `entity_id` acompaña a `"release"`/`"edition"` (el disco/edición
 concreto, validado contra el catálogo real: `422` si no existe) y no se admite con
 `"discography"` ni cuando no hay `entity_type` en absoluto (tema sin tema, hueco reservado
-para más adelante).
+para más adelante). `subforum_id` (dónde vive el hilo) y `entity_type`/`entity_id` (a qué se
+refiere, dentro de ese subforo) son independientes entre sí.
 
 `POST /forum/threads/{id}/comments` devuelve solo el comentario nuevo, no el hilo completo.
 `PATCH /forum/threads/{id}` exige `status`; `resolution_note` es un PATCH real (se omite ⇒ no

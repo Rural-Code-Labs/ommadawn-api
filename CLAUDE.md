@@ -168,7 +168,7 @@ ommadawn-api/
 │       │   ├── service.py      # CRUD anidado + demotes (primary, portada) + subida
 │       │   └── router.py       # /api/v1/discography/* (leer: público; escribir: admin)
 │       ├── forum/               # ✅ Fase 7 (bloque cerrado): ForumThread -> ForumComment
-│       │   ├── models.py       # ForumThread (entity_type/entity_id abiertos), ForumComment
+│       │   ├── models.py       # Subforum, ForumThread (entity_type/entity_id abiertos), ForumComment
 │       │   ├── schemas.py      # ThreadCreate/CommentCreate/ThreadStatusUpdate, *Read
 │       │   ├── service.py      # Sin ORM cruzado: usa auth.service/discography.service
 │       │   └── router.py       # /api/v1/forum/* (leer: público; participar: email verificado)
@@ -822,10 +822,38 @@ país/sello/fecha/formato propios.
 ## Foro (Fase 7)
 
 `app/modules/forum/` (`/api/v1/forum/threads`, migración `b8d9caca4cde`): foro de discusión
-atado al catálogo. La gente propone/discute cambios y mejoras (`ForumThread` → `ForumComment`);
-un **administrador** decide qué se aplica, A MANO, con las herramientas de edición que ya
-existen en discografía. Esta fase **no** aplica ningún cambio automáticamente — solo organiza
-la conversación.
+atado al catálogo. La gente propone/discute cambios y mejoras (`Subforum` → `ForumThread` →
+`ForumComment`); un **administrador** decide qué se aplica, A MANO, con las herramientas de
+edición que ya existen en discografía. Esta fase **no** aplica ningún cambio automáticamente —
+solo organiza la conversación.
+
+### Subforos
+
+`Subforum` (migración `a068d351cf44`, posterior): sección del foro ("Discusiones" hoy, futuro
+"Anuncios"/"Ayuda"). Todo `ForumThread` vive dentro de uno (`subforum_id`, obligatorio) —
+independiente de `entity_type`/`entity_id` (a qué se refiere, dentro de ese subforo).
+
+- **`Subforum` y `ForumThread` viven en el MISMO módulo** → `relationship()` de SQLAlchemy
+  normal (`ForumThread.subforum`/`Subforum.threads`), a diferencia de `author_id`/`entity_id`
+  (cruzan a `auth`/`discografía`, ver más abajo). Es el contraste que demuestra el patrón: 
+  mismo módulo = relación ORM sin más; módulo distinto = FK suelta + llamada a su `service`.
+- **Migración con seed + backfill**, mismo patrón que la extracción de `Label` en discografía
+  (`5677cd83477c`): 1) crear `subforums` y sembrar la fila "Discusiones"; 2) añadir
+  `subforum_id` NULLABLE (ya había hilos); 3) backfill — todo hilo existente pasa al único
+  subforo; 4) ahora sí, `NOT NULL` + FK + índice. Verificado con una fila real que ya existía
+  en dev (de una prueba manual anterior): quedó migrada a "Discusiones" correctamente.
+- **`ondelete=RESTRICT`** en `subforum_id` (mismo criterio que `Label`/`Recording`): no se
+  puede borrar un subforo con hilos dentro. Relevante el día que exista un `DELETE` de
+  subforos — hoy no hay ninguno.
+- **Sin CRUD de subforos desde la API todavía** (decisión explícita del backlog): con uno
+  solo, basta el seed de la migración. Se añadirá cuando haga falta un segundo.
+- **Gotcha de tests**: los tests usan `Base.metadata.create_all` (no Alembic), así que el
+  seed "Discusiones" de la migración NO existe en la BD de test — cada test que crea hilos
+  crea su propio `Subforum` directamente por `db_session` (`tests/test_forum.py::
+  _create_subforum`), no hay endpoint para ello.
+- **`subforum_name` denormalizado** en `ThreadListRead`/`ThreadDetailRead` (mismo criterio
+  que `release_title` en `CollectionEditionRead`, discografía): evita que la app pida el
+  subforo aparte solo para mostrar su nombre.
 
 - **Primer módulo que cruza de verdad la frontera entre módulos** (hasta ahora solo auth↔auth
   y discografía↔discografía). La regla ya documentada arriba ("los módulos NO acceden a las

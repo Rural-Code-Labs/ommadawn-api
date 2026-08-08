@@ -6,8 +6,13 @@ que se aplica -- A MANO, con las herramientas de edicion que ya existen en
 discografia. Esta fase NO aplica cambios automaticamente, solo organiza la
 conversacion.
 
-  ForumThread   (el hilo: titulo, mensaje inicial, a que se refiere, estado)
-    -> ForumComment  (respuestas al hilo, en orden cronologico)
+  Subforum      (seccion del foro: "Discusiones", futuro "Anuncios"...)
+    -> ForumThread   (el hilo: titulo, mensaje inicial, a que se refiere, estado)
+         -> ForumComment  (respuestas al hilo, en orden cronologico)
+
+`Subforum` y `ForumThread` viven en el MISMO modulo, asi que su relacion es una
+`relationship()` de SQLAlchemy normal (a diferencia de `author_id`/`entity_id`,
+que cruzan a `auth`/`discografia` -- ver mas abajo).
 
 Frontera entre modulos: `author_id`/`thread_id`/etc. son FK sueltas (enteros
 con `ForeignKey`), pero este modulo NO define relaciones ORM hacia `User`
@@ -54,6 +59,38 @@ class ThreadStatus(str, enum.Enum):
     CLOSED = "closed"
 
 
+class Subforum(Base):
+    """Tabla `subforums`: una seccion del foro (p. ej. "Discusiones", futuro
+    "Anuncios", "Ayuda"...). Todo `ForumThread` vive dentro de un subforo.
+
+    Hoy solo existe uno ("Discusiones", sembrado por la migracion que anadio
+    esta tabla), que agrupa todos los hilos que ya existian (los que se abren
+    desde un disco, una edicion, o de discografia en general). El modelo ya
+    esta pensado para varios sin tener que volver a tocar el esquema; el CRUD
+    de subforos desde la API queda pendiente hasta que haga falta un segundo.
+    """
+
+    __tablename__ = "subforums"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Nombre de un SF Symbol (icono nativo de iOS), p. ej.
+    # "bubble.left.and.bubble.right". Texto libre: la API no valida que sea un
+    # SF Symbol real, eso es responsabilidad de la app.
+    icon: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Orden de aparicion en el listado de subforos. Entero simple, SIN
+    # restriccion UNIQUE (mismo criterio que Image.position en discografia):
+    # con pocos subforos gestionados a mano, no hace falta mas.
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    threads: Mapped[list["ForumThread"]] = relationship(back_populates="subforum")
+
+    def __repr__(self) -> str:
+        return f"<Subforum id={self.id} name={self.name!r}>"
+
+
 class ForumThread(Base):
     """Tabla `forum_threads`: un hilo de discusion sobre el catalogo (o
     general, sin disco concreto).
@@ -72,6 +109,14 @@ class ForumThread(Base):
     # ondelete=CASCADE: si se borra el usuario, sus hilos desaparecen con el.
     author_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+
+    # Todo hilo vive dentro de un subforo (obligatorio, a diferencia de
+    # entity_type/entity_id). RESTRICT: no se puede borrar un subforo con
+    # hilos dentro (mismo criterio que Label/Recording en discografia) --
+    # relevante el dia que exista un DELETE de subforos, hoy no hay ninguno.
+    subforum_id: Mapped[int] = mapped_column(
+        ForeignKey("subforums.id", ondelete="RESTRICT"), index=True, nullable=False
     )
 
     # A que entidad del catalogo se refiere el hilo. Nullable DESDE YA aunque
@@ -121,6 +166,7 @@ class ForumThread(Base):
         nullable=False,
     )
 
+    subforum: Mapped["Subforum"] = relationship(back_populates="threads")
     comments: Mapped[list["ForumComment"]] = relationship(
         back_populates="thread",
         cascade="all, delete-orphan",

@@ -3,12 +3,17 @@
 Prefijo: se monta bajo `/api/v1` en `main.py`, y este router anade `/forum`,
 asi que las rutas finales son `/api/v1/forum/threads...`.
 
-Leer (listar hilos, ver detalle) es PUBLICO. Participar (crear un hilo,
-comentar) exige estar autenticado Y tener el email verificado
+Leer (listar subforos/hilos, ver detalle) es PUBLICO. Participar (crear un
+hilo, comentar) exige estar autenticado Y tener el email verificado
 (`require_verified_email`, en auth/dependencies.py) — no basta con tener una
 cuenta activa. Cambiar el `status` de un hilo exige ser ADMINISTRADOR; esta
 fase no aplica ningun cambio automaticamente en el catalogo, solo organiza la
 conversacion.
+
+Todo hilo vive dentro de un `Subforum` (`subforum_id`, obligatorio en
+`ThreadCreate`); hoy solo existe uno ("Discusiones"), sembrado por migracion.
+No hay CRUD de subforos desde la API todavia -- se anadira cuando haga falta
+un segundo.
 """
 
 from fastapi import APIRouter, Depends, Query, status
@@ -23,6 +28,7 @@ from app.modules.forum.models import ForumEntityType, ThreadStatus
 from app.modules.forum.schemas import (
     CommentCreate,
     CommentRead,
+    SubforumRead,
     ThreadCreate,
     ThreadDetailRead,
     ThreadListRead,
@@ -53,6 +59,21 @@ _INVALID_ENTITY = {
     "model": ErrorMessage,
     "description": "entity_id no corresponde a ninguna obra/edicion existente",
 }
+_SUBFORUM_NOT_FOUND = {
+    "model": ErrorMessage,
+    "description": "subforum_id no corresponde a ningun subforo existente",
+}
+
+
+@router.get(
+    "/subforums",
+    response_model=list[SubforumRead],
+    summary="Listar subforos",
+)
+async def list_subforums(session: AsyncSession = Depends(get_session)) -> list[SubforumRead]:
+    """Lista los subforos (secciones del foro), ordenados por `position`. Hoy
+    solo existe "Discusiones"; no hay CRUD de subforos desde la API todavia."""
+    return await service.list_subforums(session)
 
 
 @router.get(
@@ -61,6 +82,7 @@ _INVALID_ENTITY = {
     summary="Listar hilos del foro",
 )
 async def list_threads(
+    subforum_id: int | None = Query(default=None, description="Filtra por subforo"),
     entity_type: ForumEntityType | None = Query(
         default=None, description="Filtra por a que se refiere el hilo"
     ),
@@ -73,9 +95,12 @@ async def list_threads(
     session: AsyncSession = Depends(get_session),
 ) -> list[ThreadListRead]:
     """Lista hilos, mas recientes primero, con el numero de comentarios de
-    cada uno. `?entity_type=release&entity_id=3` para los hilos de un disco
-    concreto; `?status=open` para la cola de abiertos."""
-    return await service.list_threads(session, entity_type, entity_id, thread_status)
+    cada uno. `?subforum_id=1` para los hilos de un subforo;
+    `?entity_type=release&entity_id=3` para los hilos de un disco concreto;
+    `?status=open` para la cola de abiertos."""
+    return await service.list_threads(
+        session, subforum_id, entity_type, entity_id, thread_status
+    )
 
 
 @router.get(
@@ -99,6 +124,7 @@ async def get_thread(
     responses={
         status.HTTP_401_UNAUTHORIZED: _NO_AUTH,
         status.HTTP_403_FORBIDDEN: _EMAIL_NOT_VERIFIED,
+        status.HTTP_404_NOT_FOUND: _SUBFORUM_NOT_FOUND,
         status.HTTP_422_UNPROCESSABLE_CONTENT: _INVALID_ENTITY,
     },
 )
@@ -107,8 +133,9 @@ async def create_thread(
     current_user: User = Depends(require_verified_email),
     session: AsyncSession = Depends(get_session),
 ) -> ThreadDetailRead:
-    """Crea un hilo. `entity_type`/`entity_id` opcionales: a que obra o
-    edicion se refiere (o ninguno, tema general sobre discografia)."""
+    """Crea un hilo dentro de `subforum_id` (obligatorio). `entity_type`/
+    `entity_id` opcionales: a que obra o edicion se refiere (o ninguno, tema
+    general sobre discografia)."""
     return await service.create_thread(session, current_user.id, data)
 
 

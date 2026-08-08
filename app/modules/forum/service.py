@@ -15,10 +15,17 @@ from sqlalchemy.orm import selectinload
 
 from app.modules.auth import service as auth_service
 from app.modules.discography import service as discography_service
-from app.modules.forum.models import ForumComment, ForumEntityType, ForumThread, ThreadStatus
+from app.modules.forum.models import (
+    ForumComment,
+    ForumEntityType,
+    ForumThread,
+    Subforum,
+    ThreadStatus,
+)
 from app.modules.forum.schemas import (
     CommentCreate,
     CommentRead,
+    SubforumRead,
     ThreadCreate,
     ThreadDetailRead,
     ThreadListRead,
@@ -29,6 +36,29 @@ thread_not_found_exception = HTTPException(
     status_code=status.HTTP_404_NOT_FOUND,
     detail="Hilo no encontrado",
 )
+subforum_not_found_exception = HTTPException(
+    status_code=status.HTTP_404_NOT_FOUND,
+    detail="Subforo no encontrado",
+)
+
+# Carga en cadena para el listado/detalle de hilos: subforo (mismo modulo,
+# relationship() normal) y comentarios. Distinto del username del autor
+# (via auth.service.get_users_by_ids): Subforum SI vive en este modulo.
+_THREAD_WITH_SUBFORUM = (selectinload(ForumThread.subforum),)
+
+
+async def list_subforums(session: AsyncSession) -> list[SubforumRead]:
+    """Lista los subforos, ordenados por `position`. Hoy solo hay uno
+    ("Discusiones"); no hay CRUD desde la API todavia (ver backlog)."""
+    result = await session.execute(select(Subforum).order_by(Subforum.position))
+    return [SubforumRead.model_validate(s) for s in result.scalars().all()]
+
+
+async def _get_subforum_or_404(session: AsyncSession, subforum_id: int) -> Subforum:
+    subforum = await session.get(Subforum, subforum_id)
+    if subforum is None:
+        raise subforum_not_found_exception
+    return subforum
 
 
 async def _validate_entity_reference(
@@ -77,6 +107,8 @@ async def _build_thread_detail_read(
         body=thread.body,
         author_id=thread.author_id,
         author_username=users[thread.author_id].username,
+        subforum_id=thread.subforum_id,
+        subforum_name=thread.subforum.name,
         entity_type=thread.entity_type,
         entity_id=thread.entity_id,
         status=thread.status,
@@ -92,14 +124,17 @@ async def _build_thread_detail_read(
 async def create_thread(
     session: AsyncSession, author_id: int, data: ThreadCreate
 ) -> ThreadDetailRead:
-    """Crea un hilo. Lanza 422 si `entity_id` no corresponde a ninguna obra/
-    edicion real (ver `_validate_entity_reference`)."""
+    """Crea un hilo. Lanza 404 si `subforum_id` no existe, o 422 si
+    `entity_id` no corresponde a ninguna obra/edicion real (ver
+    `_validate_entity_reference`)."""
+    await _get_subforum_or_404(session, data.subforum_id)
     await _validate_entity_reference(session, data.entity_type, data.entity_id)
 
     thread = ForumThread(
         title=data.title,
         body=data.body,
         author_id=author_id,
+        subforum_id=data.subforum_id,
         entity_type=data.entity_type,
         entity_id=data.entity_id,
     )
@@ -117,7 +152,7 @@ async def get_thread(session: AsyncSession, thread_id: int) -> ThreadDetailRead:
     """Detalle de un hilo con sus comentarios. Lanza 404 si no existe."""
     result = await session.execute(
         select(ForumThread)
-        .options(selectinload(ForumThread.comments))
+        .options(selectinload(ForumThread.comments), *_THREAD_WITH_SUBFORUM)
         .where(ForumThread.id == thread_id)
     )
     thread = result.scalar_one_or_none()
@@ -128,17 +163,20 @@ async def get_thread(session: AsyncSession, thread_id: int) -> ThreadDetailRead:
 
 async def list_threads(
     session: AsyncSession,
+    subforum_id: int | None = None,
     entity_type: ForumEntityType | None = None,
     entity_id: int | None = None,
     thread_status: ThreadStatus | None = None,
 ) -> list[ThreadListRead]:
     """Lista hilos (mas recientes primero), con el numero de comentarios de
-    cada uno. Filtrable por `entity_type`+`entity_id` (hilos de un disco/
-    edicion concreto) y por `status` (p. ej. la cola de abiertos)."""
+    cada uno. Filtrable por `subforum_id`, por `entity_type`+`entity_id`
+    (hilos de un disco/edicion concreto) y por `status` (p. ej. la cola de
+    abiertos)."""
     count_col = func.count(ForumComment.id).label("comment_count")
     query = (
         select(ForumThread, count_col)
         .outerjoin(ForumComment, ForumComment.thread_id == ForumThread.id)
+        .options(*_THREAD_WITH_SUBFORUM)
         .group_by(ForumThread.id)
         # Desempate por id: dos hilos creados casi a la vez pueden compartir
         # el mismo created_at (la resolucion de SQLite es menor que la de
@@ -147,6 +185,8 @@ async def list_threads(
         # reciente" incluso cuando el timestamp empata.
         .order_by(ForumThread.created_at.desc(), ForumThread.id.desc())
     )
+    if subforum_id is not None:
+        query = query.where(ForumThread.subforum_id == subforum_id)
     if entity_type is not None:
         query = query.where(ForumThread.entity_type == entity_type)
     if entity_id is not None:
@@ -167,6 +207,8 @@ async def list_threads(
             title=t.title,
             author_id=t.author_id,
             author_username=users[t.author_id].username,
+            subforum_id=t.subforum_id,
+            subforum_name=t.subforum.name,
             entity_type=t.entity_type,
             entity_id=t.entity_id,
             status=t.status,

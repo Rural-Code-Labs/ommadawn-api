@@ -5,6 +5,12 @@ autenticado. Como no hay (a proposito) forma de verificar el email sin pasar
 por el flujo completo de codigo, los tests marcan `email_verified=True`
 directamente en BD (via `db_session`), igual que se marca `is_admin=True`
 en los tests de discografia.
+
+Los tests usan `Base.metadata.create_all` (ver conftest.py), no las
+migraciones de Alembic: el subforo "Discusiones" que siembra la migracion
+`a068d351cf44` NO existe en la BD de test, asi que cada test que necesita un
+subforo lo crea directamente por `db_session` (no hay endpoint de creacion
+todavia, ver backlog).
 """
 
 from httpx import AsyncClient
@@ -12,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.auth.models import User
+from app.modules.forum.models import Subforum
 
 BASE = "/api/v1/forum"
 AUTH_BASE = "/api/v1/auth"
@@ -77,6 +84,20 @@ async def _admin_headers(client: AsyncClient, db_session: AsyncSession) -> dict:
     return await _login(client, ADMIN_CREDS["username"], ADMIN_CREDS["password"])
 
 
+async def _create_subforum(
+    db_session: AsyncSession, name: str = "Discusiones", position: int = 0
+) -> int:
+    """Helper: crea un subforo directamente en BD (no hay endpoint de
+    creacion todavia). La mayoria de tests de hilos necesitan uno."""
+    subforum = Subforum(
+        name=name, icon="bubble.left.and.bubble.right", position=position
+    )
+    db_session.add(subforum)
+    await db_session.commit()
+    await db_session.refresh(subforum)
+    return subforum.id
+
+
 async def _create_release(client: AsyncClient, admin_headers: dict) -> int:
     """Helper: crea una obra minima (para probar entity_type='release'), usando
     unas cabeceras de administrador (crear discografia exige ser admin)."""
@@ -97,12 +118,52 @@ async def _create_edition(client: AsyncClient, admin_headers: dict, release_id: 
     return resp.json()["id"]
 
 
+# --- Subforos ----------------------------------------------------------------------
+
+
+async def test_list_subforums_starts_empty(client: AsyncClient):
+    resp = await client.get(f"{BASE}/subforums")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+async def test_list_subforums_orders_by_position(
+    client: AsyncClient, db_session: AsyncSession
+):
+    await _create_subforum(db_session, name="Ayuda", position=1)
+    await _create_subforum(db_session, name="Discusiones", position=0)
+
+    resp = await client.get(f"{BASE}/subforums")
+    assert resp.status_code == 200
+    names = [s["name"] for s in resp.json()]
+    assert names == ["Discusiones", "Ayuda"]
+
+
+async def test_list_subforums_includes_icon_and_description(
+    client: AsyncClient, db_session: AsyncSession
+):
+    subforum = Subforum(
+        name="Discusiones",
+        description="Hilos sobre el catalogo",
+        icon="bubble.left.and.bubble.right",
+        position=0,
+    )
+    db_session.add(subforum)
+    await db_session.commit()
+
+    resp = await client.get(f"{BASE}/subforums")
+    body = resp.json()[0]
+    assert body["description"] == "Hilos sobre el catalogo"
+    assert body["icon"] == "bubble.left.and.bubble.right"
+    assert body["position"] == 0
+
+
 # --- Crear hilos -----------------------------------------------------------------
 
 
 async def test_create_thread_requires_authentication(client: AsyncClient):
     resp = await client.post(
-        f"{BASE}/threads", json={"title": "x", "body": "y"}
+        f"{BASE}/threads", json={"title": "x", "body": "y", "subforum_id": 1}
     )
     assert resp.status_code == 401
 
@@ -110,30 +171,64 @@ async def test_create_thread_requires_authentication(client: AsyncClient):
 async def test_create_thread_requires_verified_email(
     client: AsyncClient, db_session: AsyncSession
 ):
+    subforum_id = await _create_subforum(db_session)
     await client.post(f"{AUTH_BASE}/register", json=UNVERIFIED_CREDS)
     headers = await _login(client, UNVERIFIED_CREDS["username"], UNVERIFIED_CREDS["password"])
 
     resp = await client.post(
-        f"{BASE}/threads", json={"title": "x", "body": "y"}, headers=headers
+        f"{BASE}/threads",
+        json={"title": "x", "body": "y", "subforum_id": subforum_id},
+        headers=headers,
     )
     assert resp.status_code == 403
     assert resp.json()["detail"] == "email_not_verified"
 
 
-async def test_verified_user_can_create_general_thread(
+async def test_create_thread_requires_subforum_id(
+    client: AsyncClient, db_session: AsyncSession
+):
+    headers = await _verified_headers(client, db_session)
+
+    resp = await client.post(
+        f"{BASE}/threads", json={"title": "x", "body": "y"}, headers=headers
+    )
+    assert resp.status_code == 422
+
+
+async def test_create_thread_unknown_subforum_returns_404(
     client: AsyncClient, db_session: AsyncSession
 ):
     headers = await _verified_headers(client, db_session)
 
     resp = await client.post(
         f"{BASE}/threads",
-        json={"title": "Sobre el catalogo", "body": "Un tema general"},
+        json={"title": "x", "body": "y", "subforum_id": 999},
+        headers=headers,
+    )
+    assert resp.status_code == 404
+
+
+async def test_verified_user_can_create_general_thread(
+    client: AsyncClient, db_session: AsyncSession
+):
+    subforum_id = await _create_subforum(db_session)
+    headers = await _verified_headers(client, db_session)
+
+    resp = await client.post(
+        f"{BASE}/threads",
+        json={
+            "title": "Sobre el catalogo",
+            "body": "Un tema general",
+            "subforum_id": subforum_id,
+        },
         headers=headers,
     )
     assert resp.status_code == 201
     body = resp.json()
     assert body["title"] == "Sobre el catalogo"
     assert body["body"] == "Un tema general"
+    assert body["subforum_id"] == subforum_id
+    assert body["subforum_name"] == "Discusiones"
     assert body["entity_type"] is None
     assert body["entity_id"] is None
     assert body["status"] == "open"
@@ -144,6 +239,7 @@ async def test_verified_user_can_create_general_thread(
 
 async def test_create_thread_about_a_release(client: AsyncClient, db_session: AsyncSession):
     admin_headers = await _admin_headers(client, db_session)
+    subforum_id = await _create_subforum(db_session)
     release_id = await _create_release(client, admin_headers)
     headers = await _verified_headers(client, db_session)
 
@@ -152,6 +248,7 @@ async def test_create_thread_about_a_release(client: AsyncClient, db_session: As
         json={
             "title": "Fecha incorrecta",
             "body": "La fecha de esta edicion parece mal",
+            "subforum_id": subforum_id,
             "entity_type": "release",
             "entity_id": release_id,
         },
@@ -165,6 +262,7 @@ async def test_create_thread_about_a_release(client: AsyncClient, db_session: As
 
 async def test_create_thread_about_an_edition(client: AsyncClient, db_session: AsyncSession):
     admin_headers = await _admin_headers(client, db_session)
+    subforum_id = await _create_subforum(db_session)
     release_id = await _create_release(client, admin_headers)
     edition_id = await _create_edition(client, admin_headers, release_id)
     headers = await _verified_headers(client, db_session)
@@ -174,6 +272,7 @@ async def test_create_thread_about_an_edition(client: AsyncClient, db_session: A
         json={
             "title": "Falta la portada",
             "body": "Esta edicion no tiene portada todavia",
+            "subforum_id": subforum_id,
             "entity_type": "edition",
             "entity_id": edition_id,
         },
@@ -187,11 +286,12 @@ async def test_create_thread_about_an_edition(client: AsyncClient, db_session: A
 async def test_create_thread_release_requires_entity_id(
     client: AsyncClient, db_session: AsyncSession
 ):
+    subforum_id = await _create_subforum(db_session)
     headers = await _verified_headers(client, db_session)
 
     resp = await client.post(
         f"{BASE}/threads",
-        json={"title": "x", "body": "y", "entity_type": "release"},
+        json={"title": "x", "body": "y", "subforum_id": subforum_id, "entity_type": "release"},
         headers=headers,
     )
     assert resp.status_code == 422
@@ -200,11 +300,18 @@ async def test_create_thread_release_requires_entity_id(
 async def test_create_thread_discography_rejects_entity_id(
     client: AsyncClient, db_session: AsyncSession
 ):
+    subforum_id = await _create_subforum(db_session)
     headers = await _verified_headers(client, db_session)
 
     resp = await client.post(
         f"{BASE}/threads",
-        json={"title": "x", "body": "y", "entity_type": "discography", "entity_id": 1},
+        json={
+            "title": "x",
+            "body": "y",
+            "subforum_id": subforum_id,
+            "entity_type": "discography",
+            "entity_id": 1,
+        },
         headers=headers,
     )
     assert resp.status_code == 422
@@ -213,11 +320,18 @@ async def test_create_thread_discography_rejects_entity_id(
 async def test_create_thread_unknown_release_returns_422(
     client: AsyncClient, db_session: AsyncSession
 ):
+    subforum_id = await _create_subforum(db_session)
     headers = await _verified_headers(client, db_session)
 
     resp = await client.post(
         f"{BASE}/threads",
-        json={"title": "x", "body": "y", "entity_type": "release", "entity_id": 999},
+        json={
+            "title": "x",
+            "body": "y",
+            "subforum_id": subforum_id,
+            "entity_type": "release",
+            "entity_id": 999,
+        },
         headers=headers,
     )
     assert resp.status_code == 422
@@ -226,11 +340,18 @@ async def test_create_thread_unknown_release_returns_422(
 async def test_create_thread_unknown_edition_returns_422(
     client: AsyncClient, db_session: AsyncSession
 ):
+    subforum_id = await _create_subforum(db_session)
     headers = await _verified_headers(client, db_session)
 
     resp = await client.post(
         f"{BASE}/threads",
-        json={"title": "x", "body": "y", "entity_type": "edition", "entity_id": 999},
+        json={
+            "title": "x",
+            "body": "y",
+            "subforum_id": subforum_id,
+            "entity_type": "edition",
+            "entity_id": 999,
+        },
         headers=headers,
     )
     assert resp.status_code == 422
@@ -239,6 +360,7 @@ async def test_create_thread_unknown_edition_returns_422(
 async def test_verified_user_can_create_general_discography_thread(
     client: AsyncClient, db_session: AsyncSession
 ):
+    subforum_id = await _create_subforum(db_session)
     headers = await _verified_headers(client, db_session)
 
     resp = await client.post(
@@ -246,6 +368,7 @@ async def test_verified_user_can_create_general_discography_thread(
         json={
             "title": "Nuevo tipo de release",
             "body": "Deberiamos anadir 'directo'",
+            "subforum_id": subforum_id,
             "entity_type": "discography",
         },
         headers=headers,
@@ -271,6 +394,7 @@ async def test_list_threads_starts_empty(client: AsyncClient):
 
 async def test_list_threads_filters_by_entity(client: AsyncClient, db_session: AsyncSession):
     admin_headers = await _admin_headers(client, db_session)
+    subforum_id = await _create_subforum(db_session)
     release_id = await _create_release(client, admin_headers)
     headers = await _verified_headers(client, db_session)
 
@@ -279,13 +403,16 @@ async def test_list_threads_filters_by_entity(client: AsyncClient, db_session: A
         json={
             "title": "Sobre esta obra",
             "body": "...",
+            "subforum_id": subforum_id,
             "entity_type": "release",
             "entity_id": release_id,
         },
         headers=headers,
     )
     await client.post(
-        f"{BASE}/threads", json={"title": "General", "body": "..."}, headers=headers
+        f"{BASE}/threads",
+        json={"title": "General", "body": "...", "subforum_id": subforum_id},
+        headers=headers,
     )
 
     resp = await client.get(
@@ -297,16 +424,44 @@ async def test_list_threads_filters_by_entity(client: AsyncClient, db_session: A
     assert threads[0]["title"] == "Sobre esta obra"
 
 
+async def test_list_threads_filters_by_subforum(
+    client: AsyncClient, db_session: AsyncSession
+):
+    discusiones_id = await _create_subforum(db_session, name="Discusiones", position=0)
+    anuncios_id = await _create_subforum(db_session, name="Anuncios", position=1)
+    headers = await _verified_headers(client, db_session)
+
+    await client.post(
+        f"{BASE}/threads",
+        json={"title": "Un hilo", "body": "...", "subforum_id": discusiones_id},
+        headers=headers,
+    )
+    await client.post(
+        f"{BASE}/threads",
+        json={"title": "Un anuncio", "body": "...", "subforum_id": anuncios_id},
+        headers=headers,
+    )
+
+    resp = await client.get(f"{BASE}/threads", params={"subforum_id": anuncios_id})
+    titles = [t["title"] for t in resp.json()]
+    assert titles == ["Un anuncio"]
+
+
 async def test_list_threads_filters_by_status(client: AsyncClient, db_session: AsyncSession):
     admin_headers = await _admin_headers(client, db_session)
+    subforum_id = await _create_subforum(db_session)
     headers = await _verified_headers(client, db_session)
 
     resp = await client.post(
-        f"{BASE}/threads", json={"title": "Uno", "body": "..."}, headers=headers
+        f"{BASE}/threads",
+        json={"title": "Uno", "body": "...", "subforum_id": subforum_id},
+        headers=headers,
     )
     thread_id = resp.json()["id"]
     await client.post(
-        f"{BASE}/threads", json={"title": "Dos", "body": "..."}, headers=headers
+        f"{BASE}/threads",
+        json={"title": "Dos", "body": "...", "subforum_id": subforum_id},
+        headers=headers,
     )
     await client.patch(
         f"{BASE}/threads/{thread_id}", json={"status": "resolved"}, headers=admin_headers
@@ -324,9 +479,18 @@ async def test_list_threads_filters_by_status(client: AsyncClient, db_session: A
 async def test_list_threads_orders_most_recent_first(
     client: AsyncClient, db_session: AsyncSession
 ):
+    subforum_id = await _create_subforum(db_session)
     headers = await _verified_headers(client, db_session)
-    await client.post(f"{BASE}/threads", json={"title": "Primero", "body": ".."}, headers=headers)
-    await client.post(f"{BASE}/threads", json={"title": "Segundo", "body": ".."}, headers=headers)
+    await client.post(
+        f"{BASE}/threads",
+        json={"title": "Primero", "body": "..", "subforum_id": subforum_id},
+        headers=headers,
+    )
+    await client.post(
+        f"{BASE}/threads",
+        json={"title": "Segundo", "body": "..", "subforum_id": subforum_id},
+        headers=headers,
+    )
 
     resp = await client.get(f"{BASE}/threads")
     titles = [t["title"] for t in resp.json()]
@@ -336,9 +500,12 @@ async def test_list_threads_orders_most_recent_first(
 async def test_list_threads_includes_comment_count(
     client: AsyncClient, db_session: AsyncSession
 ):
+    subforum_id = await _create_subforum(db_session)
     headers = await _verified_headers(client, db_session)
     resp = await client.post(
-        f"{BASE}/threads", json={"title": "Uno", "body": ".."}, headers=headers
+        f"{BASE}/threads",
+        json={"title": "Uno", "body": "..", "subforum_id": subforum_id},
+        headers=headers,
     )
     thread_id = resp.json()["id"]
     await client.post(
@@ -358,9 +525,12 @@ async def test_list_threads_includes_comment_count(
 async def test_add_comment_requires_verified_email(
     client: AsyncClient, db_session: AsyncSession
 ):
+    subforum_id = await _create_subforum(db_session)
     headers = await _verified_headers(client, db_session)
     resp = await client.post(
-        f"{BASE}/threads", json={"title": "x", "body": "y"}, headers=headers
+        f"{BASE}/threads",
+        json={"title": "x", "body": "y", "subforum_id": subforum_id},
+        headers=headers,
     )
     thread_id = resp.json()["id"]
 
@@ -389,9 +559,12 @@ async def test_add_comment_to_unknown_thread_returns_404(
 
 
 async def test_verified_user_can_comment(client: AsyncClient, db_session: AsyncSession):
+    subforum_id = await _create_subforum(db_session)
     headers = await _verified_headers(client, db_session)
     resp = await client.post(
-        f"{BASE}/threads", json={"title": "x", "body": "y"}, headers=headers
+        f"{BASE}/threads",
+        json={"title": "x", "body": "y", "subforum_id": subforum_id},
+        headers=headers,
     )
     thread_id = resp.json()["id"]
 
@@ -414,9 +587,12 @@ async def test_verified_user_can_comment(client: AsyncClient, db_session: AsyncS
 async def test_different_users_can_comment_on_same_thread(
     client: AsyncClient, db_session: AsyncSession
 ):
+    subforum_id = await _create_subforum(db_session)
     author_headers = await _verified_headers(client, db_session)
     resp = await client.post(
-        f"{BASE}/threads", json={"title": "x", "body": "y"}, headers=author_headers
+        f"{BASE}/threads",
+        json={"title": "x", "body": "y", "subforum_id": subforum_id},
+        headers=author_headers,
     )
     thread_id = resp.json()["id"]
 
@@ -448,9 +624,12 @@ async def test_update_thread_status_requires_authentication(client: AsyncClient)
 async def test_update_thread_status_requires_admin(
     client: AsyncClient, db_session: AsyncSession
 ):
+    subforum_id = await _create_subforum(db_session)
     headers = await _verified_headers(client, db_session)
     resp = await client.post(
-        f"{BASE}/threads", json={"title": "x", "body": "y"}, headers=headers
+        f"{BASE}/threads",
+        json={"title": "x", "body": "y", "subforum_id": subforum_id},
+        headers=headers,
     )
     thread_id = resp.json()["id"]
 
@@ -474,9 +653,12 @@ async def test_admin_can_resolve_thread_with_note(
     client: AsyncClient, db_session: AsyncSession
 ):
     admin_headers = await _admin_headers(client, db_session)
+    subforum_id = await _create_subforum(db_session)
     headers = await _verified_headers(client, db_session)
     resp = await client.post(
-        f"{BASE}/threads", json={"title": "x", "body": "y"}, headers=headers
+        f"{BASE}/threads",
+        json={"title": "x", "body": "y", "subforum_id": subforum_id},
+        headers=headers,
     )
     thread_id = resp.json()["id"]
 
@@ -495,9 +677,12 @@ async def test_update_thread_status_without_note_keeps_previous_note(
     client: AsyncClient, db_session: AsyncSession
 ):
     admin_headers = await _admin_headers(client, db_session)
+    subforum_id = await _create_subforum(db_session)
     headers = await _verified_headers(client, db_session)
     resp = await client.post(
-        f"{BASE}/threads", json={"title": "x", "body": "y"}, headers=headers
+        f"{BASE}/threads",
+        json={"title": "x", "body": "y", "subforum_id": subforum_id},
+        headers=headers,
     )
     thread_id = resp.json()["id"]
     await client.patch(
@@ -519,9 +704,12 @@ async def test_update_thread_status_can_clear_note_with_null(
     client: AsyncClient, db_session: AsyncSession
 ):
     admin_headers = await _admin_headers(client, db_session)
+    subforum_id = await _create_subforum(db_session)
     headers = await _verified_headers(client, db_session)
     resp = await client.post(
-        f"{BASE}/threads", json={"title": "x", "body": "y"}, headers=headers
+        f"{BASE}/threads",
+        json={"title": "x", "body": "y", "subforum_id": subforum_id},
+        headers=headers,
     )
     thread_id = resp.json()["id"]
     await client.patch(
